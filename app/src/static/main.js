@@ -529,31 +529,54 @@ function renderReport(results, falsePositiveMode = false) {
 }
 
 // --- PAYLOAD CATEGORIES LOGIC ---
-const PAYLOAD_CATEGORIES = [
-	'SQL Injection',
-	'XSS',
-	'Path Traversal',
-	'Command Injection',
-	'SSRF',
-	'NoSQL Injection',
-	'Local File Inclusion',
-	'LDAP Injection',
-	'HTTP Request Smuggling',
-	'Open Redirect',
-	'Sensitive Files',
-	'CRLF Injection',
-	'UTF8/Unicode Bypass',
-	'XXE',
-	'SSTI',
-	'HTTP Parameter Pollution',
-	'Web Cache Poisoning',
-	'IP Bypass',
-	'User-Agent',
-];
+// Categories are loaded dynamically from GitHub via the backend
+let PAYLOAD_CATEGORIES = [];
+let payloadCategoriesLoaded = false;
+
+async function loadPayloadCategories() {
+	const container = document.getElementById('categoryCheckboxes');
+	if (container) {
+		container.innerHTML = '<div class="text-center py-3" id="payloadLoadingIndicator"><div class="spinner-border spinner-border-sm text-cyber-accent" role="status"></div> <span class="text-sm text-gray-400">Loading payloads from GitHub...</span></div>';
+	}
+	try {
+		// Check loading status first
+		const statusResp = await fetch('/api/payloads/status');
+		const status = await statusResp.json();
+		
+		if (!status.loaded) {
+			// Wait a bit and retry - backend is still loading from GitHub
+			await new Promise(r => setTimeout(r, 2000));
+		}
+		
+		const resp = await fetch('/api/payloads');
+		if (!resp.ok) throw new Error('Failed to load payloads');
+		const data = await resp.json();
+		PAYLOAD_CATEGORIES = Object.keys(data);
+		payloadCategoriesLoaded = true;
+		console.log(`Loaded ${PAYLOAD_CATEGORIES.length} payload categories from GitHub`);
+		renderCategoryCheckboxes();
+		
+		// Update loading indicator with success
+		const indicator = document.getElementById('payloadLoadingIndicator');
+		if (indicator) indicator.remove();
+	} catch (e) {
+		console.error('Failed to load payload categories:', e);
+		// Fallback: retry after a delay
+		setTimeout(loadPayloadCategories, 3000);
+	}
+}
 
 function renderCategoryCheckboxes() {
 	const container = document.getElementById('categoryCheckboxes');
 	if (!container) return;
+	// Remove loading indicator if present
+	const indicator = document.getElementById('payloadLoadingIndicator');
+	if (indicator) indicator.remove();
+	
+	if (PAYLOAD_CATEGORIES.length === 0) {
+		container.innerHTML = '<div class="text-center py-3 text-gray-400">No categories loaded yet...</div>';
+		return;
+	}
 	container.innerHTML = '';
 	const defaultChecked = ['SQL Injection', 'XSS'];
 	PAYLOAD_CATEGORIES.forEach((cat, idx) => {
@@ -749,6 +772,15 @@ async function fetchResults() {
 	// Ensure at least one method is selected
 	if (selectedMethods.length === 0) {
 		showAlert('Please select at least one HTTP method', 'No Method Selected', 'warning');
+		btn.disabled = false;
+		btn.textContent = oldText;
+		return;
+	}
+	// Ensure payloads are loaded from GitHub
+	if (!payloadCategoriesLoaded || PAYLOAD_CATEGORIES.length === 0) {
+		showAlert('Payloads are still loading from GitHub. Please wait a moment and try again.', 'Payloads Loading', 'warning');
+		btn.disabled = false;
+		btn.textContent = oldText;
 		return;
 	}
 	// Follow redirect
@@ -1542,7 +1574,8 @@ function toggleAllCategories() {
 function initApp() {
 	// Force dark theme
 	document.body.setAttribute('data-theme', 'dark');
-	renderCategoryCheckboxes();
+	// Load payload categories dynamically from GitHub (via backend)
+	loadPayloadCategories();
 	// --- Enter в поле URL ---
 	const urlInput = document.getElementById('url');
 	if (urlInput) {

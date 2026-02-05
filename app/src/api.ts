@@ -9,6 +9,58 @@ import {
 } from './advanced-payloads';
 import { HTTPManipulator, ManipulatedRequest, HTTPManipulationOptions } from './http-manipulation';
 
+// --- Payload loading from GitHub ---
+const GITHUB_PAYLOADS_URL = 'https://raw.githubusercontent.com/PAPAMICA/waf-payloads/refs/heads/main/payloads.json';
+let payloadsLoaded = false;
+let payloadsLoading: Promise<void> | null = null;
+
+async function loadPayloadsFromGitHub(): Promise<void> {
+	if (payloadsLoaded) return;
+	if (payloadsLoading) return payloadsLoading;
+
+	payloadsLoading = (async () => {
+		try {
+			console.log('Loading payloads from GitHub...');
+			const resp = await fetch(GITHUB_PAYLOADS_URL);
+			if (!resp.ok) throw new Error(`GitHub fetch failed: ${resp.status}`);
+			const data: any = await resp.json();
+
+			// Populate PAYLOADS (base + advanced merged)
+			if (data.payloads) {
+				for (const [key, value] of Object.entries(data.payloads)) {
+					PAYLOADS[key] = value as PayloadCategory;
+				}
+			}
+			if (data.advancedPayloads) {
+				for (const [key, value] of Object.entries(data.advancedPayloads)) {
+					PAYLOADS[key] = value as PayloadCategory;
+					ADVANCED_PAYLOADS[key] = value as PayloadCategory;
+				}
+			}
+
+			// Generate ENHANCED_PAYLOADS (all payloads + encoded variations)
+			const allPayloads = { ...PAYLOADS };
+			const encoded = generateEncodedPayloads(allPayloads);
+			for (const [key, value] of Object.entries(allPayloads)) {
+				ENHANCED_PAYLOADS[key] = value;
+			}
+			for (const [key, value] of Object.entries(encoded)) {
+				ENHANCED_PAYLOADS[key] = value;
+			}
+
+			payloadsLoaded = true;
+			const totalCategories = Object.keys(PAYLOADS).length;
+			const totalPayloads = Object.values(PAYLOADS).reduce((s, c) => s + c.payloads.length, 0);
+			console.log(`Payloads loaded: ${totalCategories} categories, ${totalPayloads} payloads`);
+		} catch (e) {
+			console.error('Failed to load payloads from GitHub:', e);
+			payloadsLoading = null; // Allow retry on next request
+		}
+	})();
+
+	return payloadsLoading;
+}
+
 // Вспомогательная функция для отправки запроса с нужным методом и payload
 async function sendRequest(
 	url: string,
@@ -89,10 +141,53 @@ async function sendRequest(
 let INDEX_HTML = '';
 
 export default {
-	async fetch(request: Request): Promise<Response> {
+	async fetch(request: Request, env: any): Promise<Response> {
 		const urlObj = new URL(request.url);
+
+		// Load payloads from GitHub on first request (non-blocking for static assets)
+		if (!payloadsLoaded && urlObj.pathname.startsWith('/api/')) {
+			await loadPayloadsFromGitHub();
+		} else if (!payloadsLoaded) {
+			// Fire and forget for non-API requests
+			loadPayloadsFromGitHub();
+		}
+		
+		// Load index.html from assets if not already loaded
+		if (urlObj.pathname === '/' && !INDEX_HTML && env?.ASSETS) {
+			try {
+				const asset = await env.ASSETS.fetch(new URL('/index.html', request.url));
+				if (asset.ok) {
+					INDEX_HTML = await asset.text();
+				}
+			} catch (e) {
+				console.error('Error loading index.html from assets:', e);
+			}
+		}
+		
 		if (urlObj.pathname === '/') {
-			return new Response(INDEX_HTML, { headers: { 'content-type': 'text/html; charset=UTF-8' } });
+			// If INDEX_HTML is still empty, try to load from assets on each request
+			if (!INDEX_HTML && env?.ASSETS) {
+				try {
+					const asset = await env.ASSETS.fetch(new URL('/index.html', request.url));
+					if (asset.ok) {
+						INDEX_HTML = await asset.text();
+					}
+				} catch (e) {
+					console.error('Error loading index.html from assets:', e);
+				}
+			}
+			return new Response(INDEX_HTML || 'WAF Checker - Loading...', { headers: { 'content-type': 'text/html; charset=UTF-8' } });
+		}
+		if (urlObj.pathname === '/api/payloads/status') {
+			const totalCategories = Object.keys(PAYLOADS).length;
+			const totalPayloads = Object.values(PAYLOADS).reduce((s, c) => s + c.payloads.length, 0);
+			return new Response(JSON.stringify({
+				loaded: payloadsLoaded,
+				categories: totalCategories,
+				totalPayloads: totalPayloads,
+				source: 'github',
+				url: GITHUB_PAYLOADS_URL,
+			}), { headers: { 'content-type': 'application/json; charset=UTF-8' } });
 		}
 		if (urlObj.pathname === '/api/payloads') {
 			return handleGetPayloads(urlObj);
