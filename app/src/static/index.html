@@ -68,7 +68,7 @@
 		<link href="style.css" rel="stylesheet" />
 		<link rel="icon" type="image/svg+xml" href="favicon.svg" />
 	</head>
-	<body class="bg-cyber-bg text-gray-100 font-sans h-screen flex flex-col overflow-hidden" data-theme="dark">
+	<body class="bg-cyber-bg text-gray-100 font-sans h-screen min-h-[600px] flex flex-col overflow-hidden" data-theme="dark">
 		<!-- Legal Disclaimer Banner -->
 		<div id="disclaimerBanner" class="bg-cyber-warning/15 border-b border-cyber-warning/30 px-4 py-2 flex items-center justify-center gap-3 shrink-0 z-50 relative">
 			<svg class="w-4 h-4 text-cyber-warning shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -119,7 +119,7 @@
 		<!-- Main Content -->
 		<main class="flex flex-1 overflow-hidden">
 			<!-- Left Panel - Configuration (becomes slide-in drawer on mobile) -->
-			<aside class="w-96 min-w-96 bg-cyber-bg-secondary border-r border-cyber-accent/20 overflow-y-auto p-4 flex flex-col gap-4">
+			<aside class="aside-panel bg-cyber-bg-secondary border-r border-cyber-accent/20 overflow-y-auto p-4 flex flex-col gap-4">
 				
 				<!-- Drawer header (mobile only) -->
 				<div class="drawer-close-bar">
@@ -138,15 +138,15 @@
 				</div>
 
 				<!-- Target Configuration -->
-				<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden hover:border-cyber-accent/40 transition-colors">
+				<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden hover:border-cyber-accent/40 transition-colors" style="min-height:300px">
 					<!-- Header with tabs -->
 					<div class="flex items-center border-b border-cyber-accent/20 bg-cyber-elevated/30">
-						<button type="button" id="tabTarget" onclick="switchConfigTab('target')" 
+						<button type="button" id="tabTarget" onclick="switchConfigTab('target')"
 								class="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-bold uppercase tracking-wider transition-all border-b-2 border-cyber-accent text-cyber-accent">
 							<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
 							Target
 						</button>
-						<button type="button" id="tabAdvanced" onclick="switchConfigTab('advanced')" 
+						<button type="button" id="tabAdvanced" onclick="switchConfigTab('advanced')"
 								class="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-bold uppercase tracking-wider transition-all border-b-2 border-transparent text-gray-400 hover:text-gray-200">
 							<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>

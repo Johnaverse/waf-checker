@@ -540,6 +540,20 @@ body::before {
 }
 
 /* =============================================
+   ASIDE PANEL - Desktop layout
+   ============================================= */
+.aside-panel {
+	width: 24rem;
+	min-width: 24rem;
+	flex-shrink: 0;
+	min-height: 0;          /* allow flex child to shrink & enable overflow scroll */
+}
+
+main {
+	min-height: 0;          /* allow flex child to shrink below content size */
+}
+
+/* =============================================
    RESPONSIVE - Tablet & Mobile (<=992px)
    Aside becomes a slide-in drawer
    ============================================= */
