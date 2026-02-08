@@ -1,6 +1,15 @@
 /* WAF-CHECKER.COM - Minimal CSS for dynamic elements */
 /* Main styling is handled by Tailwind CSS */
 
+/* Force dark backgrounds on Bootstrap modals (override Bootstrap's white defaults) */
+.modal-content {
+	background-color: #161b22 !important;
+}
+.modal-header,
+.modal-footer {
+	background-color: #1c2128 !important;
+}
+
 /* Background grid pattern */
 body::before {
 	content: '';

@@ -2190,7 +2190,7 @@ let batchPollInterval = null;
 
 // Global variables for recon/audit data (for exports)
 let lastSecurityHeadersData = null;
-let lastDNSReconData = null;
+let lastDNSReconData = null; // kept for backward compat
 let lastFullReconData = null;
 
 // Enhanced reporting and analytics functions
@@ -3406,7 +3406,7 @@ function exportReconHTML(type) {
 	if (!resultsDiv) return;
 
 	const label = _getReconLabel(type);
-	const titleMap = { headers: 'Security Headers Audit', dns: 'DNS / WHOIS Intelligence', recon: 'Full Reconnaissance' };
+	const titleMap = { headers: 'Security Headers Audit', recon: 'Full Reconnaissance' };
 	const title = titleMap[type] || label;
 	const hostname = data.hostname || data.url || 'unknown';
 	const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
@@ -5151,31 +5151,10 @@ function displaySecurityHeadersResults(data) {
 	resultsDiv.innerHTML = html;
 }
 
-// =============================================
-// FEATURE: DNS Recon + WHOIS
-// =============================================
-async function runDNSRecon() {
-	const urlInput = document.getElementById('url');
-	const url = normalizeUrl(urlInput.value);
-	if (!url) { showAlert('Please enter a target URL first.', 'Missing URL', 'warning'); return; }
-	if (url !== urlInput.value) urlInput.value = url;
-
-	const resultsDiv = document.getElementById('results');
-	resultsDiv.innerHTML = `<div class="flex items-center justify-center h-full py-16">
-		${cyberLoader({ size: 'lg', color: 'text-cyan-400', text: 'Running DNS Reconnaissance...', subtext: escapeHtml(url) })}
-	</div>`;
-
-	try {
-		const resp = await fetch(`/api/dns-recon?url=${encodeURIComponent(url)}`);
-		const data = await resp.json();
-		if (!resp.ok) throw new Error(data.message || data.error || `HTTP ${resp.status}`);
-		displayDNSReconResults(data);
-	} catch (e) {
-		resultsDiv.innerHTML = `<div class="text-center py-10"><p class="text-cyber-danger font-bold">DNS Reconnaissance Failed</p><p class="text-gray-400 text-sm mt-2">${escapeHtml(e.message)}</p></div>`;
-	}
-}
+// DNS Recon is now merged into Full Recon — see displayFullReconResults
 
 function displayDNSReconResults(data) {
+	// Legacy — redirect to full recon display
 	lastDNSReconData = data;
 	const resultsDiv = document.getElementById('results');
 
@@ -5221,6 +5200,11 @@ function displayDNSReconResults(data) {
 				</div>
 			</div>
 		</div>`;
+
+	// Domain WHOIS (RDAP) — legacy (DNS Recon merged into Full Recon)
+	if (data.domainWhois) {
+		// Redirect to Full Recon display for consistency
+	}
 
 	// Infrastructure detection
 	if (data.infrastructure && data.infrastructure.length > 0) {
@@ -5561,19 +5545,19 @@ async function runFullRecon() {
 
 	const resultsDiv = document.getElementById('results');
 	resultsDiv.innerHTML = `<div class="flex items-center justify-center h-full py-16">
-		${cyberLoader({ size: 'lg', color: 'text-emerald-400', text: 'Running Full Reconnaissance...', subtext: 'Scanning technologies, DNS, WHOIS, probes... (max ~15s)' })}
+		${cyberLoader({ size: 'lg', color: 'text-emerald-400', text: 'Running Full Reconnaissance...', subtext: 'Technologies, DNS, WHOIS, SSL, subdomains, probes... (max ~30s)' })}
 	</div>`;
 
 	try {
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), 15000);
+		const timeout = setTimeout(() => controller.abort(), 30000);
 		const resp = await fetch(`/api/recon?url=${encodeURIComponent(url)}`, { signal: controller.signal });
 		clearTimeout(timeout);
 		const data = await resp.json();
 		if (!resp.ok) throw new Error(data.message || data.error || `HTTP ${resp.status}`);
 		displayFullReconResults(data);
 	} catch (e) {
-		const msg = e.name === 'AbortError' ? 'Request timed out after 15 seconds. The target site may be too slow or blocking requests.' : e.message;
+		const msg = e.name === 'AbortError' ? 'Request timed out after 30 seconds. The target site may be too slow or blocking requests.' : e.message;
 		resultsDiv.innerHTML = `<div class="text-center py-10"><p class="text-cyber-danger font-bold">Full Reconnaissance Failed</p><p class="text-gray-400 text-sm mt-2">${escapeHtml(msg)}</p><button onclick="runFullRecon()" class="mt-4 px-4 py-2 bg-emerald-500/20 border border-emerald-500/50 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-all text-sm">Retry</button></div>`;
 	}
 }
@@ -5651,7 +5635,7 @@ function displayFullReconResults(data) {
 			</div>
 		</div>
 
-		<!-- Page Info -->
+		<!-- Section 1: Page Info -->
 		<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
 			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
 				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Page Information</h4>
@@ -5666,7 +5650,108 @@ function displayFullReconResults(data) {
 		</div>
 	</div>`;
 
-	// SSL / TLS Security Analysis (right after Page Information)
+	// === Section 2: Domain WHOIS (RDAP) ===
+	if (data.domainWhois) {
+		const dw = data.domainWhois;
+		const crDate = dw.creationDate ? new Date(dw.creationDate) : null;
+		const expDate = dw.expirationDate ? new Date(dw.expirationDate) : null;
+		const chgDate = dw.lastChanged ? new Date(dw.lastChanged) : null;
+		const dwDaysLeft = expDate ? Math.ceil((expDate.getTime() - Date.now()) / 86400000) : null;
+		const expColor = dwDaysLeft === null ? 'text-gray-500' : dwDaysLeft > 90 ? 'text-emerald-400' : dwDaysLeft > 30 ? 'text-yellow-400' : 'text-red-400';
+		const domAge = crDate ? Math.floor((Date.now() - crDate.getTime()) / (86400000 * 365.25)) : null;
+		const fDate = (d) => d ? d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A';
+
+		// Helper to render a contact card
+		const renderContact = (label, contact, iconSvg) => {
+			if (!contact) return '';
+			const fields = [];
+			if (contact.name) fields.push({icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z', val: contact.name, color: '#fff', bold: true, size: '12px'});
+			if (contact.org && contact.org !== contact.name) fields.push({icon: 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4', val: contact.org, color: '#d1d5db', bold: false, size: '11px'});
+			if (contact.email) fields.push({icon: 'M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', val: contact.email, color: '#22d3ee', bold: false, size: '11px', mono: true});
+			if (contact.phone) fields.push({icon: 'M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z', val: contact.phone, color: '#9ca3af', bold: false, size: '11px', mono: true});
+			const loc = [contact.address, contact.country && !contact.address?.includes(contact.country) ? contact.country : null].filter(Boolean).join(', ');
+			if (loc) fields.push({icon: 'M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z', val: loc, color: '#6b7280', bold: false, size: '10px'});
+			if (fields.length === 0) return '';
+			const rowsHtml = fields.map(f => '<div style="display:block;padding:4px 0;border-bottom:1px solid rgba(99,102,241,0.07)">' +
+				'<span style="display:inline-block;width:16px;vertical-align:middle;margin-right:6px">' +
+				'<svg style="width:12px;height:12px;color:#4b5563" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="' + f.icon + '"/></svg></span>' +
+				'<span style="font-size:' + f.size + ';color:' + f.color + (f.bold ? ';font-weight:700' : '') + (f.mono ? ';font-family:monospace' : '') + ';word-break:break-all">' + escapeHtml(f.val) + '</span></div>'
+			).join('');
+			return '<div style="background:var(--cyber-card,#0d1117);padding:12px">' +
+				'<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">' + iconSvg + '<span style="font-size:10px;color:rgba(129,140,248,0.8);text-transform:uppercase;font-weight:700;letter-spacing:0.05em">' + escapeHtml(label) + '</span></div>' +
+				rowsHtml + '</div>';
+		};
+
+		const contactIcons = {
+			registrant: '<svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>',
+			admin: '<svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>',
+			tech: '<svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',
+			abuse: '<svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
+		};
+
+		html += `<div class="bg-cyber-card border border-indigo-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-indigo-500/20 bg-indigo-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-indigo-400 uppercase tracking-wider">Domain WHOIS — ${escapeHtml(dw.domainName || data.hostname)}</h4>
+				${reconTip('Domain registration data via RDAP: registrar, owner, contacts, dates, status, and DNSSEC.')}
+			</div>
+
+			<!-- Registration Info -->
+			<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-indigo-500/10">
+				${dw.registrar ? `<div class="bg-cyber-card p-3 col-span-2"><span class="text-[10px] text-gray-500 uppercase block">Registrar</span><span class="text-sm text-white font-bold">${escapeHtml(dw.registrar)}</span></div>` : ''}
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">Created</span>
+					<span class="text-sm text-white font-mono">${fDate(crDate)}</span>
+					${domAge !== null ? `<span class="text-[10px] text-gray-500 ml-1">(${domAge}y)</span>` : ''}
+				</div>
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">Expires</span>
+					<span class="text-sm font-mono ${expColor}">${fDate(expDate)}</span>
+					${dwDaysLeft !== null ? `<span class="text-[10px] ${expColor} ml-1">(${dwDaysLeft > 0 ? dwDaysLeft + 'd' : 'EXPIRED'})</span>` : ''}
+				</div>
+				${chgDate ? `<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Last Updated</span><span class="text-sm text-white font-mono">${fDate(chgDate)}</span></div>` : ''}
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">DNSSEC</span>
+					<span class="text-sm font-bold ${dw.dnssec ? 'text-emerald-400' : 'text-gray-500'}">${dw.dnssec ? 'Signed' : 'Unsigned'}</span>
+				</div>
+			</div>`;
+
+		// Contacts section
+		const contactCards = [];
+		contactCards.push(renderContact('Registrant (Owner)', dw.registrant, contactIcons.registrant));
+		contactCards.push(renderContact('Administrative', dw.adminContact, contactIcons.admin));
+		contactCards.push(renderContact('Technical', dw.techContact, contactIcons.tech));
+		contactCards.push(renderContact('Abuse', dw.abuseContact, contactIcons.abuse));
+		const validContacts = contactCards.filter(c => c);
+		if (validContacts.length > 0) {
+			html += `<div class="border-t border-indigo-500/10">
+				<div class="px-4 py-2 bg-indigo-500/5">
+					<h5 class="text-[10px] font-bold text-indigo-400/70 uppercase tracking-wider">Contacts</h5>
+				</div>
+				<div class="grid grid-cols-1 md:grid-cols-2 gap-px bg-indigo-500/10">
+					${validContacts.join('')}
+				</div>
+			</div>`;
+		}
+
+		if (dw.status && dw.status.length > 0) {
+			html += `<div class="px-4 py-2 border-t border-indigo-500/10">
+				<span class="text-[10px] text-gray-500 uppercase block mb-1">Domain Status</span>
+				<div class="flex flex-wrap gap-1">
+					${dw.status.map(s => {
+						const isOk = s.includes('ok') || s.includes('active');
+						const isLock = s.includes('Lock') || s.includes('Prohibited');
+						const color = isOk ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' :
+							isLock ? 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30' :
+							'text-gray-400 bg-gray-500/10 border-gray-500/30';
+						return `<span class="text-[9px] px-1.5 py-0.5 rounded border ${color} font-mono">${escapeHtml(s)}</span>`;
+					}).join('')}
+				</div>
+			</div>`;
+		}
+		html += `</div>`;
+	}
+
+	// === Section 3: SSL / TLS Security ===
 	const ssl = data.ssl || {};
 	const cert = ssl.certificate;
 	const sslChecks = ssl.checks || [];
@@ -5697,7 +5782,6 @@ function displayFullReconResults(data) {
 			</div>
 		</div>`;
 
-	// Security Checks (sxtlscheck-style)
 	if (sslChecks.length > 0) {
 		html += `<div class="divide-y divide-emerald-500/10">`;
 		for (const check of sslChecks) {
@@ -5712,7 +5796,6 @@ function displayFullReconResults(data) {
 		html += `</div>`;
 	}
 
-	// TLS Protocols
 	if (ssl.tlsInfo?.protocols && ssl.tlsInfo.protocols.length > 0) {
 		html += `<div class="border-t border-emerald-500/20">
 			<div class="px-4 py-2 bg-emerald-500/5">
@@ -5756,91 +5839,103 @@ function displayFullReconResults(data) {
 		html += `</div></div>`;
 	}
 
-	// Certificate Details
 	if (cert) {
 		const issuerCN = cert.issuer ? (cert.issuer.match(/CN=([^,]+)/)?.[1] || '').trim() : '';
 		const issuerOrg = cert.issuer ? (cert.issuer.match(/O=([^,]+)/)?.[1] || '').trim() : '';
 		const notAfter = cert.notAfter ? new Date(cert.notAfter) : null;
 		const notBefore = cert.notBefore ? new Date(cert.notBefore) : null;
-		const daysLeft = notAfter ? Math.ceil((notAfter.getTime() - Date.now()) / 86400000) : null;
-		const validityColor = daysLeft === null ? 'text-gray-600' : daysLeft > 30 ? 'text-emerald-400' : daysLeft > 0 ? 'text-yellow-400' : 'text-red-400';
+		const certDaysLeft = notAfter ? Math.ceil((notAfter.getTime() - Date.now()) / 86400000) : null;
+		const validityColor = certDaysLeft === null ? 'text-gray-600' : certDaysLeft > 30 ? 'text-emerald-400' : certDaysLeft > 0 ? 'text-yellow-400' : 'text-red-400';
 		const totalDays = (notBefore && notAfter) ? Math.ceil((notAfter.getTime() - notBefore.getTime()) / 86400000) : null;
 
 		html += `<div class="border-t border-emerald-500/20">
-			<div class="px-4 py-2 bg-emerald-500/5">
-				<h5 class="text-[10px] font-bold text-emerald-400/70 uppercase tracking-wider">Certificate</h5>
-			</div>
+			<div class="px-4 py-2 bg-emerald-500/5"><h5 class="text-[10px] font-bold text-emerald-400/70 uppercase tracking-wider">Certificate</h5></div>
 			<div class="grid grid-cols-2 gap-px bg-emerald-500/5">
-				<div class="bg-cyber-card p-3">
-					<span class="text-[10px] text-gray-500 uppercase block">Subject (CN)</span>
-					<code class="text-xs text-white font-mono font-bold">${escapeHtml(cert.subject || data.hostname)}</code>
-				</div>
-				<div class="bg-cyber-card p-3">
-					<span class="text-[10px] text-gray-500 uppercase block">Issuer</span>
-					<span class="text-xs text-white font-bold">${escapeHtml(issuerOrg || issuerCN || 'Unknown')}</span>
-					${issuerCN && issuerOrg ? `<div class="text-[10px] text-gray-500 font-mono mt-0.5">CN=${escapeHtml(issuerCN)}</div>` : ''}
-				</div>
-				<div class="bg-cyber-card p-3">
-					<span class="text-[10px] text-gray-500 uppercase block">Valid From</span>
-					<code class="text-xs text-white font-mono">${notBefore ? notBefore.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}</code>
-				</div>
-				<div class="bg-cyber-card p-3">
-					<span class="text-[10px] text-gray-500 uppercase block">Valid Until</span>
-					<code class="text-xs font-mono ${validityColor}">${notAfter ? notAfter.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}</code>
-					${daysLeft !== null ? `<span class="text-[10px] ${validityColor} ml-1">(${daysLeft > 0 ? daysLeft + 'd left' : 'EXPIRED'})</span>` : ''}
-				</div>
-				${ssl.certAlgorithm ? `<div class="bg-cyber-card p-3">
-					<span class="text-[10px] text-gray-500 uppercase block">Key Algorithm</span>
-					<span class="text-xs font-bold ${ssl.certAlgorithm === 'ECDSA' ? 'text-emerald-400' : 'text-cyan-400'}">${ssl.certAlgorithm}</span>
-				</div>` : ''}
-				${totalDays ? `<div class="bg-cyber-card p-3">
-					<span class="text-[10px] text-gray-500 uppercase block">Duration</span>
-					<span class="text-xs text-white font-mono">${totalDays} days</span>
-				</div>` : ''}
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Subject (CN)</span><code class="text-xs text-white font-mono font-bold">${escapeHtml(cert.subject || data.hostname)}</code></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Issuer</span><span class="text-xs text-white font-bold">${escapeHtml(issuerOrg || issuerCN || 'Unknown')}</span>${issuerCN && issuerOrg ? `<div class="text-[10px] text-gray-500 font-mono mt-0.5">CN=${escapeHtml(issuerCN)}</div>` : ''}</div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Valid From</span><code class="text-xs text-white font-mono">${notBefore ? notBefore.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}</code></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Valid Until</span><code class="text-xs font-mono ${validityColor}">${notAfter ? notAfter.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}</code>${certDaysLeft !== null ? `<span class="text-[10px] ${validityColor} ml-1">(${certDaysLeft > 0 ? certDaysLeft + 'd left' : 'EXPIRED'})</span>` : ''}</div>
+				${ssl.certAlgorithm ? `<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Key Algorithm</span><span class="text-xs font-bold ${ssl.certAlgorithm === 'ECDSA' ? 'text-emerald-400' : 'text-cyan-400'}">${ssl.certAlgorithm}</span></div>` : ''}
+				${totalDays ? `<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Duration</span><span class="text-xs text-white font-mono">${totalDays} days</span></div>` : ''}
 			</div>`;
-		if (cert.serialNumber) {
-			html += `<div class="px-4 py-2 border-t border-emerald-500/10">
-				<span class="text-[10px] text-gray-500 uppercase">Serial Number</span>
-				<code class="text-[10px] text-gray-400 font-mono break-all ml-2">${escapeHtml(cert.serialNumber)}</code>
-			</div>`;
-		}
-		if (cert.domains && cert.domains.length > 0) {
-			html += `<div class="px-4 py-2 border-t border-emerald-500/10">
-				<span class="text-[10px] text-gray-500 uppercase block mb-1">SAN DNS Names (${cert.domains.length})</span>
-				<div class="flex flex-wrap gap-1">${cert.domains.map(d => `<code class="text-[10px] font-mono text-emerald-400/70 px-1.5 py-0.5 bg-emerald-500/10 rounded">${escapeHtml(d)}</code>`).join('')}</div>
-			</div>`;
-		}
+		if (cert.serialNumber) html += `<div class="px-4 py-2 border-t border-emerald-500/10"><span class="text-[10px] text-gray-500 uppercase">Serial Number</span><code class="text-[10px] text-gray-400 font-mono break-all ml-2">${escapeHtml(cert.serialNumber)}</code></div>`;
+		if (cert.domains && cert.domains.length > 0) html += `<div class="px-4 py-2 border-t border-emerald-500/10"><span class="text-[10px] text-gray-500 uppercase block mb-1">SAN DNS Names (${cert.domains.length})</span><div class="flex flex-wrap gap-1">${cert.domains.map(d => `<code class="text-[10px] font-mono text-emerald-400/70 px-1.5 py-0.5 bg-emerald-500/10 rounded">${escapeHtml(d)}</code>`).join('')}</div></div>`;
 		html += `</div>`;
 	}
 
-	// Mixed Content
 	if (ssl.mixedContent && ssl.mixedContent.length > 0) {
-		html += `<div class="border-t border-red-500/20">
-			<div class="px-4 py-2 bg-red-500/5">
-				<h5 class="text-[10px] font-bold text-red-400/70 uppercase tracking-wider">Mixed Content (${ssl.mixedContent.length} insecure resource${ssl.mixedContent.length > 1 ? 's' : ''})</h5>
+		html += `<div class="border-t border-red-500/20"><div class="px-4 py-2 bg-red-500/5"><h5 class="text-[10px] font-bold text-red-400/70 uppercase tracking-wider">Mixed Content (${ssl.mixedContent.length})</h5></div><div class="px-4 py-2 space-y-1">${ssl.mixedContent.map(url => `<code class="block text-[10px] font-mono text-red-400/80 break-all">${escapeHtml(url)}</code>`).join('')}</div></div>`;
+	}
+
+	html += `<div class="border-t border-emerald-500/10"><div class="px-4 py-2 flex flex-wrap gap-3">
+		${ssl.serverHeader ? `<div class="flex items-center gap-1.5"><span class="text-[10px] text-gray-500">Server:</span><code class="text-[10px] font-mono text-white">${escapeHtml(ssl.serverHeader)}</code></div>` : ''}
+		${ssl.tlsInfo?.alpn ? `<div class="flex items-center gap-1.5"><span class="text-[10px] text-gray-500">Alt-Svc:</span><code class="text-[10px] font-mono text-gray-400 break-all">${escapeHtml(ssl.tlsInfo.alpn)}</code></div>` : ''}
+	</div></div></div>`;
+
+	// === Section 4: DNS (IP Addresses + Nameservers) ===
+	html += `<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+		<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">IP Addresses</h4>
+				${reconTip('IPv4/IPv6 addresses resolved via DNS A/AAAA records.')}
 			</div>
-			<div class="px-4 py-2 space-y-1">
-				${ssl.mixedContent.map(url => `<code class="block text-[10px] font-mono text-red-400/80 break-all">${escapeHtml(url)}</code>`).join('')}
+			<div class="p-3 space-y-1">
+				${(data.dns?.ipAddresses || []).map(ip => `<code class="block text-sm font-mono text-white">${escapeHtml(ip)}</code>`).join('') || '<span class="text-xs text-gray-500">None</span>'}
+				${(data.dns?.ipv6Addresses || []).length > 0 ? data.dns.ipv6Addresses.map(ip => `<code class="block text-[10px] font-mono text-gray-400 break-all">${escapeHtml(ip)}</code>`).join('') : ''}
+			</div>
+		</div>
+		<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Nameservers</h4>
+				${reconTip('DNS nameservers (NS records) responsible for the domain.')}
+			</div>
+			<div class="p-3 space-y-1">
+				${(data.dns?.nameservers || []).map(ns => `<code class="block text-sm font-mono text-white">${escapeHtml(ns)}</code>`).join('') || '<span class="text-xs text-gray-500">None</span>'}
+			</div>
+		</div>
+	</div>`;
+
+	// === Section 5: Infrastructure ===
+	if (data.infrastructure && data.infrastructure.length > 0) {
+		html += `<div class="bg-cyber-card border border-purple-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-purple-500/20 bg-purple-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-purple-400 uppercase tracking-wider">Infrastructure</h4>
+				${reconTip('Hosting infrastructure detected from DNS records: CDN providers, email services, and DNS providers.')}
+			</div>
+			<div class="p-3 space-y-2">`;
+		for (const infra of data.infrastructure) {
+			html += `<div class="flex items-center gap-3 px-3 py-2 bg-cyber-elevated/50 rounded-lg">
+				<span class="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">${escapeHtml(infra.type)}</span>
+				<span class="text-sm font-bold text-white">${escapeHtml(infra.provider)}</span>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// === Section 6: IP WHOIS ===
+	if (data.whois) {
+		const w = data.whois;
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">IP WHOIS — ${escapeHtml(w.ip || '')}</h4>
+				${reconTip('IP geolocation and ownership: ISP, organization, ASN, and location.')}
+			</div>
+			<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-cyber-accent/10">
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">ISP</span><span class="text-xs text-white">${escapeHtml(w.isp || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Org</span><span class="text-xs text-white">${escapeHtml(w.org || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">ASN</span><span class="text-xs text-white font-mono">${escapeHtml(w.asn || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Location</span><span class="text-xs text-white">${escapeHtml(w.city || '')}${w.city && w.country ? ', ' : ''}${escapeHtml(w.country || 'N/A')}</span></div>
+				${data.reverseDns ? `<div class="bg-cyber-card p-3 col-span-2 md:col-span-4"><span class="text-[10px] text-gray-500 uppercase flex items-center">Reverse DNS (PTR)${reconTip('PTR record maps IP back to hostname.')}</span><code class="text-xs font-mono text-cyan-400 mt-0.5 block">${escapeHtml(data.reverseDns)}</code></div>` : ''}
 			</div>
 		</div>`;
 	}
 
-	// Server & Protocol info footer
-	html += `<div class="border-t border-emerald-500/10">
-		<div class="px-4 py-2 flex flex-wrap gap-3">
-			${ssl.serverHeader ? `<div class="flex items-center gap-1.5"><span class="text-[10px] text-gray-500">Server:</span><code class="text-[10px] font-mono text-white">${escapeHtml(ssl.serverHeader)}</code></div>` : ''}
-			${ssl.tlsInfo?.alpn ? `<div class="flex items-center gap-1.5"><span class="text-[10px] text-gray-500">Alt-Svc:</span><code class="text-[10px] font-mono text-gray-400 break-all">${escapeHtml(ssl.tlsInfo.alpn)}</code></div>` : ''}
-		</div>
-	</div>`;
-
-	html += `</div>`;
-
-	// Technologies
+	// === Section 7: Technologies ===
 	if (data.technologies && data.technologies.length > 0) {
 		html += `<div class="bg-cyber-card border border-emerald-500/20 rounded-xl overflow-hidden mb-4">
 			<div class="px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-500/5 flex items-center">
 				<h4 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">Detected Technologies (${data.technologies.length})</h4>
-				${reconTip('Technologies identified from HTTP response headers (Server, X-Powered-By), HTML patterns, cookies, and known CDN/WAF signatures.')}
+				${reconTip('Technologies identified from HTTP headers, HTML patterns, cookies, and CDN/WAF signatures.')}
 			</div>
 			<div class="p-3 space-y-2">`;
 		for (const tech of data.technologies) {
@@ -5852,18 +5947,61 @@ function displayFullReconResults(data) {
 			</div>`;
 		}
 		html += `</div></div>`;
-	} else {
-		html += `<div class="bg-cyber-card border border-gray-500/20 rounded-xl p-4 mb-4 text-center">
-			<p class="text-gray-500 text-sm">No specific technologies detected</p>
-		</div>`;
 	}
 
-	// JS Libraries
+	// === Section 8: CMS Details ===
+	const cms = data.cmsDetails;
+	if (cms && (cms.cmsName || cms.plugins?.length > 0 || cms.themes?.length > 0)) {
+		html += `<div class="bg-cyber-card border border-pink-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-pink-500/20 bg-pink-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-pink-400 uppercase tracking-wider">CMS Details</h4>
+				${reconTip('CMS detected from HTML patterns, meta generator tag, and resource URLs. Plugins/themes from wp-content paths.')}
+			</div>
+			<div class="p-3 space-y-3">`;
+		if (cms.cmsName) {
+			const logo = cmsLogos[cms.cmsName] || `<div class="w-8 h-8 rounded-lg bg-pink-500/20 flex items-center justify-center text-pink-400 font-bold text-sm">${escapeHtml(cms.cmsName.charAt(0))}</div>`;
+			html += `<div class="flex items-center gap-4 px-4 py-3 bg-gradient-to-r from-pink-500/10 to-purple-500/10 border border-pink-500/20 rounded-xl">
+				<div class="flex-shrink-0">${logo}</div>
+				<div><div class="text-lg font-bold text-white">${escapeHtml(cms.cmsName)}</div></div>
+			</div>`;
+		}
+		if (data.pageInfo?.generatorFull && data.pageInfo.generatorFull !== data.pageInfo.generator) {
+			html += `<div class="px-3 py-2 bg-cyber-elevated/30 rounded-lg"><span class="text-[10px] text-gray-500 uppercase block mb-1">Page Builder / Generator</span><code class="text-[11px] text-gray-400 break-all">${escapeHtml(data.pageInfo.generatorFull)}</code></div>`;
+		}
+		if (cms.themes && cms.themes.length > 0) {
+			html += `<div><div class="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1.5 px-1">Themes (${cms.themes.length})</div><div class="space-y-1">`;
+			for (const theme of cms.themes) {
+				html += `<div class="flex items-center gap-2 px-3 py-2 bg-cyber-elevated/50 rounded-lg">
+					<span class="w-2 h-2 rounded-full ${theme.active ? 'bg-pink-400' : 'bg-gray-600'}"></span>
+					<span class="text-sm text-white font-medium">${escapeHtml(theme.name)}</span>
+					${theme.version ? `<span class="text-[10px] font-mono text-pink-300/70">${escapeHtml(theme.version)}</span>` : ''}
+					${theme.active ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-pink-500/15 text-pink-400 border border-pink-500/30 font-bold ml-auto">ACTIVE</span>' : ''}
+					<span class="text-[10px] text-gray-600 ml-auto font-mono">${escapeHtml(theme.slug)}</span>
+				</div>`;
+			}
+			html += `</div></div>`;
+		}
+		if (cms.plugins && cms.plugins.length > 0) {
+			html += `<div><div class="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1.5 px-1">Plugins / Extensions (${cms.plugins.length})</div><div class="space-y-1">`;
+			for (const plugin of cms.plugins) {
+				html += `<div class="flex items-center gap-2 px-3 py-1.5 bg-cyber-elevated/50 rounded-lg">
+					<span class="w-1.5 h-1.5 rounded-full bg-purple-400/60"></span>
+					<span class="text-xs text-white">${escapeHtml(plugin.name)}</span>
+					${plugin.version ? `<span class="text-[10px] font-mono text-purple-300/70">${escapeHtml(plugin.version)}</span>` : ''}
+					<span class="text-[10px] text-gray-600 ml-auto font-mono">${escapeHtml(plugin.slug)}</span>
+				</div>`;
+			}
+			html += `</div></div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// === Section 9: JS Libraries ===
 	if (data.jsLibraries && data.jsLibraries.length > 0) {
 		html += `<div class="bg-cyber-card border border-amber-500/20 rounded-xl overflow-hidden mb-4">
 			<div class="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5 flex items-center">
 				<h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider">JavaScript Libraries (${data.jsLibraries.length})</h4>
-				${reconTip('Frontend JavaScript libraries detected from script/CSS file names and paths. Versions are extracted from filenames when available (e.g. jquery-3.7.1.min.js).')}
+				${reconTip('Frontend JS libraries detected from script/CSS file names. Versions extracted from filenames.')}
 			</div>
 			<div class="p-3 space-y-1">`;
 		for (const lib of data.jsLibraries) {
@@ -5876,232 +6014,13 @@ function displayFullReconResults(data) {
 		html += `</div></div>`;
 	}
 
-	// CMS Details (version, plugins, themes) — after Technologies + JS Libraries
-	const cms = data.cmsDetails;
-	if (cms && (cms.cmsName || cms.plugins?.length > 0 || cms.themes?.length > 0)) {
-		html += `<div class="bg-cyber-card border border-pink-500/20 rounded-xl overflow-hidden mb-4">
-			<div class="px-4 py-2.5 border-b border-pink-500/20 bg-pink-500/5 flex items-center">
-				<h4 class="text-xs font-bold text-pink-400 uppercase tracking-wider">CMS Details</h4>
-				${reconTip('Content Management System detected from HTML patterns, meta generator tag, and resource URLs. Plugins and themes are extracted from wp-content paths with versions from ?ver= parameters.')}
-			</div>
-			<div class="p-3 space-y-3">`;
-
-		// CMS Name + Logo + Version
-		if (cms.cmsName) {
-			const logo = cmsLogos[cms.cmsName] || `<div class="w-8 h-8 rounded-lg bg-pink-500/20 flex items-center justify-center text-pink-400 font-bold text-sm">${escapeHtml(cms.cmsName.charAt(0))}</div>`;
-			html += `<div class="flex items-center gap-4 px-4 py-3 bg-gradient-to-r from-pink-500/10 to-purple-500/10 border border-pink-500/20 rounded-xl">
-				<div class="flex-shrink-0">${logo}</div>
-				<div>
-					<div class="text-lg font-bold text-white">${escapeHtml(cms.cmsName)}</div>
-				</div>
-			</div>`;
-		}
-
-		// Generator detail (show page builder info etc.)
-		if (data.pageInfo?.generatorFull && data.pageInfo.generatorFull !== data.pageInfo.generator) {
-			html += `<div class="px-3 py-2 bg-cyber-elevated/30 rounded-lg">
-				<span class="text-[10px] text-gray-500 uppercase block mb-1">Page Builder / Generator</span>
-				<code class="text-[11px] text-gray-400 break-all">${escapeHtml(data.pageInfo.generatorFull)}</code>
-			</div>`;
-		}
-
-		// Themes
-		if (cms.themes && cms.themes.length > 0) {
-			html += `<div>
-				<div class="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1.5 px-1">Themes (${cms.themes.length})</div>
-				<div class="space-y-1">`;
-			for (const theme of cms.themes) {
-				html += `<div class="flex items-center gap-2 px-3 py-2 bg-cyber-elevated/50 rounded-lg">
-					<span class="w-2 h-2 rounded-full ${theme.active ? 'bg-pink-400' : 'bg-gray-600'}"></span>
-					<span class="text-sm text-white font-medium">${escapeHtml(theme.name)}</span>
-					${theme.version ? `<span class="text-[10px] font-mono text-pink-300/70">${escapeHtml(theme.version)}</span>` : ''}
-					${theme.active ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-pink-500/15 text-pink-400 border border-pink-500/30 font-bold ml-auto">ACTIVE</span>' : ''}
-					<span class="text-[10px] text-gray-600 ml-auto font-mono">${escapeHtml(theme.slug)}</span>
-				</div>`;
-			}
-			html += `</div></div>`;
-		}
-
-		// Plugins
-		if (cms.plugins && cms.plugins.length > 0) {
-			html += `<div>
-				<div class="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1.5 px-1">Plugins / Extensions (${cms.plugins.length})</div>
-				<div class="space-y-1">`;
-			for (const plugin of cms.plugins) {
-				html += `<div class="flex items-center gap-2 px-3 py-1.5 bg-cyber-elevated/50 rounded-lg">
-					<span class="w-1.5 h-1.5 rounded-full bg-purple-400/60"></span>
-					<span class="text-xs text-white">${escapeHtml(plugin.name)}</span>
-					${plugin.version ? `<span class="text-[10px] font-mono text-purple-300/70">${escapeHtml(plugin.version)}</span>` : ''}
-					<span class="text-[10px] text-gray-600 ml-auto font-mono">${escapeHtml(plugin.slug)}</span>
-				</div>`;
-			}
-			html += `</div></div>`;
-		}
-
-		html += `</div></div>`;
-	}
-
-	// IP + Nameservers
-	html += `<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-		<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden">
-			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
-				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">IP Addresses</h4>
-				${reconTip('IPv4/IPv6 addresses resolved via DNS A/AAAA records. Reverse DNS (PTR) shows the hostname associated with the IP by the hosting provider.')}
-			</div>
-			<div class="p-3 space-y-1">
-				${(data.dns?.ipAddresses || []).map(ip => `<code class="block text-sm font-mono text-white">${escapeHtml(ip)}</code>`).join('') || '<span class="text-xs text-gray-500">None</span>'}
-				${(data.dns?.ipv6Addresses || []).length > 0 ? data.dns.ipv6Addresses.map(ip => `<code class="block text-[10px] font-mono text-gray-400 break-all">${escapeHtml(ip)}</code>`).join('') : ''}
-			</div>
-		</div>
-		<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden">
-			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
-				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Nameservers</h4>
-				${reconTip('DNS nameservers (NS records) responsible for the domain. Can reveal the DNS provider (e.g. Cloudflare, AWS Route53, OVH).')}
-			</div>
-			<div class="p-3 space-y-1">
-				${(data.dns?.nameservers || []).map(ns => `<code class="block text-sm font-mono text-white">${escapeHtml(ns)}</code>`).join('') || '<span class="text-xs text-gray-500">None</span>'}
-			</div>
-		</div>
-	</div>`;
-
-	// Infrastructure
-	if (data.infrastructure && data.infrastructure.length > 0) {
-		html += `<div class="bg-cyber-card border border-purple-500/20 rounded-xl overflow-hidden mb-4">
-			<div class="px-4 py-2.5 border-b border-purple-500/20 bg-purple-500/5 flex items-center">
-				<h4 class="text-xs font-bold text-purple-400 uppercase tracking-wider">Infrastructure</h4>
-				${reconTip('Hosting infrastructure detected from DNS records patterns: CDN providers (Cloudflare, AWS), email services (Google Workspace, Microsoft 365), and DNS providers.')}
-			</div>
-			<div class="p-3 space-y-2">`;
-		for (const infra of data.infrastructure) {
-			html += `<div class="flex items-center gap-3 px-3 py-2 bg-cyber-elevated/50 rounded-lg">
-				<span class="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">${escapeHtml(infra.type)}</span>
-				<span class="text-sm font-bold text-white">${escapeHtml(infra.provider)}</span>
-			</div>`;
-		}
-		html += `</div></div>`;
-	}
-
-	// WHOIS
-	if (data.whois) {
-		const w = data.whois;
-		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
-			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
-				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">WHOIS — ${escapeHtml(w.ip || '')}</h4>
-				${reconTip('IP geolocation and ownership data. Shows the Internet Service Provider (ISP), organization, Autonomous System Number (ASN), and approximate physical location of the server.')}
-			</div>
-			<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-cyber-accent/10">
-				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">ISP</span><span class="text-xs text-white">${escapeHtml(w.isp || 'N/A')}</span></div>
-				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Org</span><span class="text-xs text-white">${escapeHtml(w.org || 'N/A')}</span></div>
-				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">ASN</span><span class="text-xs text-white font-mono">${escapeHtml(w.asn || 'N/A')}</span></div>
-				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Location</span><span class="text-xs text-white">${escapeHtml(w.city || '')}${w.city && w.country ? ', ' : ''}${escapeHtml(w.country || 'N/A')}</span></div>
-				${data.reverseDns ? `<div class="bg-cyber-card p-3 col-span-2 md:col-span-4"><span class="text-[10px] text-gray-500 uppercase flex items-center">Reverse DNS (PTR)${reconTip('PTR record maps an IP address back to a hostname. Reveals the server identity as configured by the hosting provider.')}</span><code class="text-xs font-mono text-cyan-400 mt-0.5 block">${escapeHtml(data.reverseDns)}</code></div>` : ''}
-			</div>
-		</div>`;
-	}
-
-	// Open Graph / Social metadata
-	const ogKeys = data.openGraph ? Object.keys(data.openGraph) : [];
-	if (ogKeys.length > 0) {
-		html += `<details open class="bg-cyber-card border border-blue-500/20 rounded-xl overflow-hidden mb-4">
-			<summary class="px-4 py-2.5 bg-blue-500/5 cursor-pointer text-xs font-bold text-blue-400 uppercase tracking-wider hover:text-blue-300 transition-colors flex items-center">
-				Open Graph / Social (${ogKeys.length})
-				${reconTip('Open Graph (og:) and Twitter Card metadata used for link previews on social media. Shows how the page appears when shared on Facebook, Twitter, LinkedIn, etc.')}
-			</summary>
-			<div class="divide-y divide-blue-500/10">`;
-		// Show og:image preview if available
-		const ogImage = data.openGraph['og:image'];
-		if (ogImage) {
-			html += `<div class="p-3 flex items-center gap-3">
-				<img src="${escapeHtml(ogImage)}" alt="OG Image" class="h-16 rounded border border-blue-500/20 object-cover" onerror="this.style.display='none'"/>
-				<div class="text-[10px] text-gray-500 break-all">${escapeHtml(ogImage)}</div>
-			</div>`;
-		}
-		for (const [key, value] of Object.entries(data.openGraph)) {
-			if (key === 'og:image') continue;
-			html += `<div class="flex gap-2 px-4 py-1.5 text-[11px]">
-				<span class="font-mono text-blue-400 font-bold whitespace-nowrap">${escapeHtml(key)}</span>
-				<span class="text-gray-400 break-all">${escapeHtml(String(value))}</span>
-			</div>`;
-		}
-		html += `</div></details>`;
-	}
-
-	// Feeds + Emails
-	const feeds = data.pageMeta?.feeds || [];
-	const emails = data.pageMeta?.emails || [];
-	if (feeds.length > 0 || emails.length > 0) {
-		html += `<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">`;
-		if (feeds.length > 0) {
-			html += `<div class="bg-cyber-card border border-orange-500/20 rounded-xl overflow-hidden">
-				<div class="px-4 py-2.5 border-b border-orange-500/20 bg-orange-500/5 flex items-center">
-					<h4 class="text-xs font-bold text-orange-400 uppercase tracking-wider">RSS / Atom Feeds (${feeds.length})</h4>
-					${reconTip('RSS and Atom feed URLs found in the HTML. These provide syndication endpoints for content aggregators and news readers.')}
-				</div>
-				<div class="p-3 space-y-1">`;
-			for (const feed of feeds) {
-				html += `<div class="flex items-center gap-2">
-					<span class="px-1.5 py-0.5 text-[9px] font-bold rounded bg-orange-500/15 text-orange-400 border border-orange-500/30">${escapeHtml(feed.type)}</span>
-					<code class="text-[10px] text-gray-400 break-all">${escapeHtml(feed.href)}</code>
-				</div>`;
-			}
-			html += `</div></div>`;
-		}
-		if (emails.length > 0) {
-			html += `<div class="bg-cyber-card border border-yellow-500/20 rounded-xl overflow-hidden">
-				<div class="px-4 py-2.5 border-b border-yellow-500/20 bg-yellow-500/5 flex items-center">
-					<h4 class="text-xs font-bold text-yellow-400 uppercase tracking-wider">Email Addresses (${emails.length})</h4>
-					${reconTip('Email addresses found in the page HTML source code. These may be contact addresses, admin emails, or addresses leaked in comments/scripts.')}
-				</div>
-				<div class="p-3 space-y-1">`;
-			for (const email of emails) {
-				html += `<code class="block text-xs font-mono text-yellow-300/80">${escapeHtml(email)}</code>`;
-			}
-			html += `</div></div>`;
-		}
-		html += `</div>`;
-	}
-
-	// Probes
-	if (data.probes && data.probes.length > 0) {
-		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
-			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
-				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Path Probing</h4>
-				${reconTip('Common paths checked for existence: robots.txt, sitemap.xml, admin panels, security.txt, etc. Green = accessible (2xx/3xx), gray = not found or blocked.')}
-			</div>
-			<div class="divide-y divide-cyber-accent/10">`;
-		for (const probe of data.probes) {
-			const statusColor = probe.exists ? 'text-cyber-success' : 'text-gray-600';
-			const statusBg = probe.exists ? 'bg-cyber-success/10' : 'bg-gray-500/5';
-			html += `<div class="flex items-center justify-between px-4 py-2 ${statusBg}">
-				<div class="flex items-center gap-2">
-					<span class="w-2 h-2 rounded-full ${probe.exists ? 'bg-cyber-success' : 'bg-gray-600'}"></span>
-					<code class="text-xs font-mono ${statusColor}">${escapeHtml(probe.path)}</code>
-					<span class="text-[10px] text-gray-500">${escapeHtml(probe.name)}</span>
-				</div>
-				<span class="text-[10px] font-mono ${probe.exists ? 'text-cyber-success' : 'text-gray-600'}">${probe.status || '—'}</span>
-			</div>`;
-		}
-		html += `</div></div>`;
-
-		for (const probe of data.probes) {
-			if (probe.snippet) {
-				html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
-					<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30">
-						<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">${escapeHtml(probe.name)} Content</h4>
-					</div>
-					<pre class="p-3 text-[11px] font-mono text-gray-400 overflow-x-auto max-h-48 overflow-y-auto">${escapeHtml(probe.snippet)}</pre>
-				</div>`;
-			}
-		}
-	}
-
-	// Security Headers Summary
+	// === Section 10: Security Headers ===
 	if (data.securityHeaders) {
 		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
 			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center justify-between">
 				<div class="flex items-center">
 					<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Security Headers</h4>
-					${reconTip('HTTP security headers that protect against common attacks: CSP (XSS), HSTS (HTTPS enforcement), X-Frame-Options (clickjacking), X-Content-Type-Options (MIME sniffing), Referrer-Policy, Permissions-Policy.')}
+					${reconTip('HTTP security headers: CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy.')}
 				</div>
 				<span class="text-[10px] font-bold ${parseInt(data.securityHeadersScore) >= 4 ? 'text-cyber-success' : parseInt(data.securityHeadersScore) >= 2 ? 'text-yellow-400' : 'text-cyber-danger'}">${data.securityHeadersScore}</span>
 			</div>
@@ -6110,22 +6029,18 @@ function displayFullReconResults(data) {
 			const present = value !== null;
 			html += `<div class="flex items-center justify-between px-4 py-1.5 ${present ? 'bg-cyber-success/5' : ''}">
 				<code class="text-[11px] font-mono ${present ? 'text-white' : 'text-gray-600'}">${escapeHtml(header)}</code>
-				<span class="text-[10px] ${present ? 'text-cyber-success font-bold' : 'text-gray-600'}">
-					${present ? '✓' : '✗'}
-				</span>
+				<span class="text-[10px] ${present ? 'text-cyber-success font-bold' : 'text-gray-600'}">${present ? '✓' : '✗'}</span>
 			</div>`;
 		}
 		html += `</div></div>`;
 	}
 
-	// SSL / TLS section removed from here — moved to after Page Information
-
-	// Cookies
+	// === Section 11: Cookies ===
 	if (data.cookies && data.cookies.length > 0) {
 		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
 			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
 				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Cookies (${data.cookies.length})</h4>
-				${reconTip('Cookies set by the server. Secure flag = sent only over HTTPS. HttpOnly = not accessible to JavaScript (XSS protection). SameSite = CSRF protection. Missing flags are security risks.')}
+				${reconTip('Cookies set by the server. Secure = HTTPS only. HttpOnly = no JS access. SameSite = CSRF protection.')}
 			</div>
 			<div class="divide-y divide-cyber-accent/10">`;
 		for (const cookie of data.cookies) {
@@ -6148,24 +6063,174 @@ function displayFullReconResults(data) {
 		html += `</div></div>`;
 	}
 
-	// All Response Headers (collapsible)
-	if (data.responseHeaders) {
-		html += `<details open class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
-			<summary class="px-4 py-2.5 bg-cyber-elevated/30 cursor-pointer text-xs font-bold text-gray-400 uppercase tracking-wider hover:text-white transition-colors flex items-center">
-				All Response Headers (${Object.keys(data.responseHeaders).length})
-				${reconTip('Complete list of HTTP response headers returned by the server. May reveal server software, caching configuration, security policies, and custom headers.')}
+	// === Section 12: Email Security (SPF / DMARC) ===
+	if (data.emailSecurity) {
+		const es = data.emailSecurity;
+		html += `<div class="bg-cyber-card border border-cyan-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyan-500/20 bg-cyan-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-cyan-400 uppercase tracking-wider">Email Security</h4>
+				${reconTip('SPF defines which mail servers can send emails for this domain. DMARC policy tells receivers how to handle messages that fail SPF/DKIM checks.')}
+			</div>
+			<div class="p-3 space-y-2">
+				<div class="flex items-center gap-2">
+					<span class="w-2 h-2 rounded-full ${es.hasSPF ? 'bg-cyber-success' : 'bg-cyber-danger'}"></span>
+					<span class="text-xs ${es.hasSPF ? 'text-cyber-success' : 'text-cyber-danger'} font-bold">SPF</span>
+					<code class="text-[10px] text-gray-500 font-mono ml-2 break-all">${es.spf ? escapeHtml(es.spf) : 'Not configured'}</code>
+				</div>
+				<div class="flex items-center gap-2">
+					<span class="w-2 h-2 rounded-full ${es.hasDMARC ? 'bg-cyber-success' : 'bg-cyber-danger'}"></span>
+					<span class="text-xs ${es.hasDMARC ? 'text-cyber-success' : 'text-cyber-danger'} font-bold">DMARC</span>
+					<code class="text-[10px] text-gray-500 font-mono ml-2 break-all">${es.dmarc ? escapeHtml(es.dmarc) : 'Not configured'}</code>
+				</div>
+			</div>
+		</div>`;
+	}
+
+	// === Section 13: Mail Servers (MX) ===
+	if (data.mailServers && data.mailServers.length > 0) {
+		html += `<div class="bg-cyber-card border border-cyan-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyan-500/20 bg-cyan-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-cyan-400 uppercase tracking-wider">Mail Servers (MX)</h4>
+				${reconTip('Mail Exchange records define which servers handle email for the domain. Priority (P) indicates preference — lower = higher priority.')}
+			</div>
+			<div class="p-3 space-y-1">
+				${data.mailServers.map(mx => `<div class="flex items-center gap-3"><span class="text-[10px] text-gray-500 font-mono w-8">P:${mx.priority}</span><code class="text-sm font-mono text-white">${escapeHtml(mx.server)}</code></div>`).join('')}
+			</div>
+		</div>`;
+	}
+
+	// === Section 14: Open Graph / Social ===
+	const ogKeys = data.openGraph ? Object.keys(data.openGraph) : [];
+	if (ogKeys.length > 0) {
+		html += `<details open class="bg-cyber-card border border-blue-500/20 rounded-xl overflow-hidden mb-4">
+			<summary class="px-4 py-2.5 bg-blue-500/5 cursor-pointer text-xs font-bold text-blue-400 uppercase tracking-wider hover:text-blue-300 transition-colors flex items-center">
+				Open Graph / Social (${ogKeys.length})
+				${reconTip('Open Graph and Twitter Card metadata for social media link previews.')}
 			</summary>
-			<div class="p-3 max-h-64 overflow-y-auto space-y-1">`;
-		for (const [key, value] of Object.entries(data.responseHeaders)) {
-			html += `<div class="flex gap-2 text-[11px]">
-				<span class="font-mono text-cyber-accent font-bold whitespace-nowrap">${escapeHtml(key)}:</span>
-				<span class="font-mono text-gray-400 break-all">${escapeHtml(String(value))}</span>
-			</div>`;
+			<div class="divide-y divide-blue-500/10">`;
+		const ogImage = data.openGraph['og:image'];
+		if (ogImage) {
+			html += `<div class="p-3 flex items-center gap-3"><img src="${escapeHtml(ogImage)}" alt="OG Image" class="h-16 rounded border border-blue-500/20 object-cover" onerror="this.style.display='none'"/><div class="text-[10px] text-gray-500 break-all">${escapeHtml(ogImage)}</div></div>`;
+		}
+		for (const [key, value] of Object.entries(data.openGraph)) {
+			if (key === 'og:image') continue;
+			html += `<div class="flex gap-2 px-4 py-1.5 text-[11px]"><span class="font-mono text-blue-400 font-bold whitespace-nowrap">${escapeHtml(key)}</span><span class="text-gray-400 break-all">${escapeHtml(String(value))}</span></div>`;
 		}
 		html += `</div></details>`;
 	}
 
-	// Reverse IP (other domains on same IP) — at the very end
+	// === Section 15: Feeds + Emails ===
+	const feeds = data.pageMeta?.feeds || [];
+	const emails = data.pageMeta?.emails || [];
+	if (feeds.length > 0 || emails.length > 0) {
+		html += `<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">`;
+		if (feeds.length > 0) {
+			html += `<div class="bg-cyber-card border border-orange-500/20 rounded-xl overflow-hidden">
+				<div class="px-4 py-2.5 border-b border-orange-500/20 bg-orange-500/5 flex items-center">
+					<h4 class="text-xs font-bold text-orange-400 uppercase tracking-wider">RSS / Atom Feeds (${feeds.length})</h4>
+					${reconTip('RSS and Atom feed URLs found in the HTML.')}
+				</div>
+				<div class="p-3 space-y-1">`;
+			for (const feed of feeds) {
+				html += `<div class="flex items-center gap-2"><span class="px-1.5 py-0.5 text-[9px] font-bold rounded bg-orange-500/15 text-orange-400 border border-orange-500/30">${escapeHtml(feed.type)}</span><code class="text-[10px] text-gray-400 break-all">${escapeHtml(feed.href)}</code></div>`;
+			}
+			html += `</div></div>`;
+		}
+		if (emails.length > 0) {
+			html += `<div class="bg-cyber-card border border-yellow-500/20 rounded-xl overflow-hidden">
+				<div class="px-4 py-2.5 border-b border-yellow-500/20 bg-yellow-500/5 flex items-center">
+					<h4 class="text-xs font-bold text-yellow-400 uppercase tracking-wider">Email Addresses (${emails.length})</h4>
+					${reconTip('Email addresses found in the HTML source.')}
+				</div>
+				<div class="p-3 space-y-1">`;
+			for (const email of emails) {
+				html += `<code class="block text-xs font-mono text-yellow-300/80">${escapeHtml(email)}</code>`;
+			}
+			html += `</div></div>`;
+		}
+		html += `</div>`;
+	}
+
+	// === Section 16: Path Probing ===
+	if (data.probes && data.probes.length > 0) {
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Path Probing</h4>
+				${reconTip('Common paths checked: robots.txt, sitemap.xml, admin panels, security.txt. Green = accessible, gray = not found.')}
+			</div>
+			<div class="divide-y divide-cyber-accent/10">`;
+		for (const probe of data.probes) {
+			const statusColor = probe.exists ? 'text-cyber-success' : 'text-gray-600';
+			const statusBg = probe.exists ? 'bg-cyber-success/10' : 'bg-gray-500/5';
+			html += `<div class="flex items-center justify-between px-4 py-2 ${statusBg}">
+				<div class="flex items-center gap-2">
+					<span class="w-2 h-2 rounded-full ${probe.exists ? 'bg-cyber-success' : 'bg-gray-600'}"></span>
+					<code class="text-xs font-mono ${statusColor}">${escapeHtml(probe.path)}</code>
+					<span class="text-[10px] text-gray-500">${escapeHtml(probe.name)}</span>
+				</div>
+				<span class="text-[10px] font-mono ${probe.exists ? 'text-cyber-success' : 'text-gray-600'}">${probe.status || '—'}</span>
+			</div>`;
+		}
+		html += `</div></div>`;
+		for (const probe of data.probes) {
+			if (probe.snippet) {
+				html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+					<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30">
+						<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">${escapeHtml(probe.name)} Content</h4>
+					</div>
+					<pre class="p-3 text-[11px] font-mono text-gray-400 overflow-x-auto max-h-48 overflow-y-auto">${escapeHtml(probe.snippet)}</pre>
+				</div>`;
+			}
+		}
+	}
+
+	// === Section 17: TXT Records ===
+	if (data.txtRecords && data.txtRecords.length > 0) {
+		html += `<details open class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<summary class="px-4 py-2.5 bg-cyber-elevated/30 cursor-pointer text-xs font-bold text-gray-400 uppercase tracking-wider hover:text-white transition-colors flex items-center">
+				TXT Records (${data.txtRecords.length})
+				${reconTip('DNS TXT records contain verification tokens, SPF policies, DKIM keys, and other metadata published for the domain.')}
+			</summary>
+			<div class="p-3 space-y-1 max-h-48 overflow-y-auto">
+				${data.txtRecords.map(txt => `<code class="block text-[10px] font-mono text-gray-400 break-all py-1 border-b border-cyber-accent/5">${escapeHtml(txt)}</code>`).join('')}
+			</div>
+		</details>`;
+	}
+
+	// === Section 18: Discovered Subdomains ===
+	if (data.subdomains && data.subdomains.length > 0) {
+		const stats = data.subdomainStats || {};
+		html += `<div class="bg-cyber-card border border-emerald-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-500/5 flex items-center justify-between">
+				<div class="flex items-center">
+					<h4 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">Discovered Subdomains (${data.subdomains.length})</h4>
+					${reconTip('Subdomains found via Certificate Transparency logs (crt.sh) and DNS brute-force of common prefixes (www, mail, api, etc.).')}
+				</div>
+				<div class="flex gap-2">
+					${stats.fromCT ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 font-bold">CT: ${stats.fromCT}</span>` : ''}
+					${stats.fromDNS ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-bold">DNS: ${stats.fromDNS}</span>` : ''}
+				</div>
+			</div>
+			<div class="max-h-80 overflow-y-auto divide-y divide-cyber-accent/10">`;
+		for (const sub of data.subdomains) {
+			const srcColor = sub.source === 'DNS + CT' ? 'text-purple-400 bg-purple-500/10 border-purple-500/30' :
+				sub.source === 'DNS' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' :
+				'text-blue-400 bg-blue-500/10 border-blue-500/30';
+			html += `<div class="flex items-center justify-between px-4 py-1.5 hover:bg-cyber-elevated/30 transition-colors">
+				<div class="flex items-center gap-2 min-w-0">
+					<span class="w-1.5 h-1.5 rounded-full ${sub.ip ? 'bg-emerald-400' : 'bg-gray-600'} flex-shrink-0"></span>
+					<code class="text-xs font-mono text-white whitespace-nowrap">${escapeHtml(sub.name)}</code>
+				</div>
+				<div class="flex items-center gap-2 flex-shrink-0 ml-2">
+					${sub.ip ? `<code class="text-[10px] font-mono text-gray-400 whitespace-nowrap">${escapeHtml(sub.ip)}</code>` : '<span class="text-[10px] text-gray-600 whitespace-nowrap">no A record</span>'}
+					<span class="text-[8px] px-1 py-0.5 rounded border ${srcColor} font-bold whitespace-nowrap">${escapeHtml(sub.source)}</span>
+				</div>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// === Section 19: Reverse IP / Shared Hosting ===
 	if (data.reverseIpDomains && data.reverseIpDomains.length > 0) {
 		const domains = data.reverseIpDomains;
 		const targetHost = data.hostname?.toLowerCase() || '';
@@ -6174,17 +6239,16 @@ function displayFullReconResults(data) {
 			<div class="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5 flex items-center justify-between">
 				<div class="flex items-center">
 					<h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider">Reverse IP — Shared Hosting (${otherDomains.length} domain${otherDomains.length > 1 ? 's' : ''})</h4>
-					${reconTip('Domains hosted on the same IP address (shared hosting). This reveals other websites sharing the same server, which can indicate shared hosting, CDN, or virtual hosting configuration.')}
+					${reconTip('Domains hosted on the same IP address (shared hosting).')}
 				</div>
 				${data.dns?.ipAddresses?.[0] ? `<code class="text-[10px] font-mono text-gray-500">${escapeHtml(data.dns.ipAddresses[0])}</code>` : ''}
 			</div>
 			<div class="max-h-64 overflow-y-auto divide-y divide-amber-500/10">`;
 		for (const domain of otherDomains) {
-			const isSelf = domain === targetHost;
 			html += `<div class="flex items-center justify-between px-4 py-1.5 hover:bg-cyber-elevated/30 transition-colors">
 				<div class="flex items-center gap-2 min-w-0">
-					<span class="w-1.5 h-1.5 rounded-full ${isSelf ? 'bg-amber-400' : 'bg-gray-600'} flex-shrink-0"></span>
-					<code class="text-xs font-mono ${isSelf ? 'text-amber-400 font-bold' : 'text-white'} whitespace-nowrap">${escapeHtml(domain)}</code>
+					<span class="w-1.5 h-1.5 rounded-full bg-gray-600 flex-shrink-0"></span>
+					<code class="text-xs font-mono text-white whitespace-nowrap">${escapeHtml(domain)}</code>
 				</div>
 				<a href="https://${escapeHtml(domain)}" target="_blank" rel="noopener" class="text-[10px] text-gray-600 hover:text-cyan-400 transition-colors flex-shrink-0 ml-2">
 					<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
@@ -6192,6 +6256,20 @@ function displayFullReconResults(data) {
 			</div>`;
 		}
 		html += `</div></div>`;
+	}
+
+	// === Section 20: All Response Headers ===
+	if (data.responseHeaders) {
+		html += `<details class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<summary class="px-4 py-2.5 bg-cyber-elevated/30 cursor-pointer text-xs font-bold text-gray-400 uppercase tracking-wider hover:text-white transition-colors flex items-center">
+				All Response Headers (${Object.keys(data.responseHeaders).length})
+				${reconTip('Complete HTTP response headers. May reveal server software, caching, security policies.')}
+			</summary>
+			<div class="p-3 max-h-64 overflow-y-auto space-y-1">`;
+		for (const [key, value] of Object.entries(data.responseHeaders)) {
+			html += `<div class="flex gap-2 text-[11px]"><span class="font-mono text-cyber-accent font-bold whitespace-nowrap">${escapeHtml(key)}:</span><span class="font-mono text-gray-400 break-all">${escapeHtml(String(value))}</span></div>`;
+		}
+		html += `</div></details>`;
 	}
 
 	html += `</div>`;

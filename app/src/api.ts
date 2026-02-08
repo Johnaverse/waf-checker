@@ -1816,8 +1816,8 @@ async function handleDNSRecon(request: Request): Promise<Response> {
 	const rootDomain = domainParts.length > 2 ? domainParts.slice(-2).join('.') : hostname;
 
 	try {
-		// Run DNS resolution, WHOIS, reverse DNS, subdomain discovery, and reverse IP in parallel
-		const [dnsSettled, whoisSettled, ptrSettled, ctSubsSettled, bruteSubsSettled, reverseIpSettled] = await Promise.allSettled([
+		// Run DNS resolution, WHOIS, reverse DNS, subdomain discovery, reverse IP, and domain RDAP in parallel
+		const [dnsSettled, whoisSettled, ptrSettled, ctSubsSettled, bruteSubsSettled, reverseIpSettled, domainWhoisSettled] = await Promise.allSettled([
 			// DNS records
 			(async () => {
 				const results = await Promise.allSettled(DNS_RECORD_TYPES.map(async (type) => {
@@ -1876,12 +1876,125 @@ async function handleDNSRecon(request: Request): Promise<Response> {
 				if (aRecords.length === 0) return [];
 				return reverseIPLookup(aRecords[0].data);
 			})(),
+			// Domain WHOIS via RDAP
+			(async () => {
+				try {
+					const rdapResp = await fetchWithTimeout(`https://rdap.org/domain/${encodeURIComponent(rootDomain)}`, {
+						headers: { 'Accept': 'application/rdap+json, application/json', 'User-Agent': 'Mozilla/5.0 (compatible; WAF-Checker/1.0)' },
+					}, 5000);
+					if (!rdapResp.ok) return null;
+					const rdap: any = await rdapResp.json();
+
+					// Helper: extract contact info from an entity's vcardArray
+					// Clean URI prefixes from vCard values
+					const cleanUri = (val: string | null): string | null => {
+						if (!val) return null;
+						return val.replace(/^(tel:|mailto:|sip:)/i, '').trim() || null;
+					};
+
+					const extractContact = (entity: any) => {
+						const contact: Record<string, string | null> = { name: null, org: null, email: null, phone: null, address: null, country: null };
+						if (!entity?.vcardArray?.[1]) return contact;
+						for (const field of entity.vcardArray[1]) {
+							const key = field[0];
+							const val = field[3];
+							if (key === 'fn') contact.name = (typeof val === 'string' ? val.trim() : null) || null;
+							else if (key === 'org') {
+								const orgVal = Array.isArray(val) ? val[0] : val;
+								contact.org = (typeof orgVal === 'string' ? orgVal.trim() : null) || null;
+							}
+							else if (key === 'email') contact.email = cleanUri(typeof val === 'string' ? val : null);
+							else if (key === 'tel') contact.phone = cleanUri(typeof val === 'string' ? val : (typeof val === 'object' && val?.uri ? val.uri : null));
+							else if (key === 'adr') {
+								const parts = Array.isArray(val) ? val : [];
+								const addrParts = parts.filter((p: any) => p && typeof p === 'string' && p.trim());
+								if (addrParts.length > 0) contact.address = addrParts.join(', ');
+								if (parts.length >= 7 && parts[6] && typeof parts[6] === 'string') contact.country = parts[6].trim();
+							}
+						}
+						if (!contact.name && entity.handle) contact.name = entity.handle;
+						return contact;
+					};
+
+					let registrar: string | null = null;
+					let registrant: Record<string, string | null> | null = null;
+					let adminContact: Record<string, string | null> | null = null;
+					let techContact: Record<string, string | null> | null = null;
+					let abuseContact: Record<string, string | null> | null = null;
+
+					const processEntities = (entities: any[]) => {
+						for (const entity of entities) {
+							const roles: string[] = entity.roles || [];
+							if (roles.includes('registrar')) {
+								registrar = entity.vcardArray?.[1]?.find((v: any) => v[0] === 'fn')?.[3]
+									|| entity.publicIds?.[0]?.identifier
+									|| entity.handle
+									|| null;
+								if (entity.entities) {
+									for (const sub of entity.entities) {
+										if (sub.roles?.includes('abuse')) abuseContact = extractContact(sub);
+									}
+								}
+							}
+							if (roles.includes('registrant')) registrant = extractContact(entity);
+							if (roles.includes('administrative')) adminContact = extractContact(entity);
+							if (roles.includes('technical')) techContact = extractContact(entity);
+							if (roles.includes('abuse') && !abuseContact) abuseContact = extractContact(entity);
+						}
+					};
+
+					if (rdap.entities) processEntities(rdap.entities);
+
+					// Extract dates from events
+					let creationDate: string | null = null;
+					let expirationDate: string | null = null;
+					let lastChanged: string | null = null;
+					if (rdap.events) {
+						for (const ev of rdap.events) {
+							if (ev.eventAction === 'registration') creationDate = ev.eventDate || null;
+							else if (ev.eventAction === 'expiration') expirationDate = ev.eventDate || null;
+							else if (ev.eventAction === 'last changed' || ev.eventAction === 'last update of RDAP database') lastChanged = ev.eventDate || null;
+						}
+					}
+
+					// Extract status
+					const status: string[] = rdap.status || [];
+
+					// Extract nameservers from RDAP
+					const rdapNameservers: string[] = (rdap.nameservers || []).map((ns: any) => String(ns.ldhName || '').toLowerCase()).filter((n: string) => n);
+
+					// Domain name and handle
+					const domainName = rdap.ldhName || rdap.handle || rootDomain;
+
+					// DNSSEC
+					const dnssec = rdap.secureDNS?.delegationSigned === true;
+
+					// Clean up null-only contacts
+					const isEmptyContact = (c: Record<string, string | null> | null) => !c || Object.values(c).every(v => !v);
+
+					return {
+						domainName,
+						registrar,
+						registrant: isEmptyContact(registrant) ? null : registrant,
+						adminContact: isEmptyContact(adminContact) ? null : adminContact,
+						techContact: isEmptyContact(techContact) ? null : techContact,
+						abuseContact: isEmptyContact(abuseContact) ? null : abuseContact,
+						creationDate,
+						expirationDate,
+						lastChanged,
+						status,
+						dnssec,
+						rdapNameservers: rdapNameservers.length > 0 ? rdapNameservers : null,
+					};
+				} catch { return null; }
+			})(),
 		]);
 
 		const dnsRecords = dnsSettled.status === 'fulfilled' ? dnsSettled.value : {};
 		const whoisData = whoisSettled.status === 'fulfilled' ? whoisSettled.value : null;
 		const reverseDns = ptrSettled.status === 'fulfilled' ? ptrSettled.value : null;
 		const reverseIpDomains = reverseIpSettled.status === 'fulfilled' ? reverseIpSettled.value : [];
+		const domainWhois = domainWhoisSettled.status === 'fulfilled' ? domainWhoisSettled.value : null;
 
 		// Merge subdomains from CT and brute-force
 		const ctSubdomains = ctSubsSettled.status === 'fulfilled' ? ctSubsSettled.value : [];
@@ -1943,6 +2056,7 @@ async function handleDNSRecon(request: Request): Promise<Response> {
 				txtRecords: txtValues,
 				dnsRecords,
 				infrastructure,
+				domainWhois,
 				whois: whoisData,
 				subdomains,
 				subdomainStats: {
@@ -2628,6 +2742,8 @@ async function handleFullRecon(request: Request): Promise<Response> {
 
 	const baseUrl = `${parsedTarget.protocol}//${parsedTarget.host}`;
 	const hostname = parsedTarget.hostname;
+	const reconDomainParts = hostname.split('.');
+	const reconRootDomain = reconDomainParts.length > 2 ? reconDomainParts.slice(-2).join('.') : hostname;
 
 	// Result containers with defaults (so partial results still work)
 	let mainResponseTime = 0;
@@ -2652,10 +2768,15 @@ async function handleFullRecon(request: Request): Promise<Response> {
 	let pageMeta: any = { language: null, canonical: null, favicon: null, feeds: [], emails: [] };
 	let sslCertificate: any = null;
 	let reverseIpDomains: string[] = [];
+	let subdomains: Array<{ name: string; ip: string; source: string }> = [];
+	let subdomainStats: any = { total: 0, fromCT: 0, fromDNS: 0 };
+	let mailServers: Array<{ priority: number; server: string }> = [];
+	let txtValues: string[] = [];
+	let emailSecurity: any = { spf: null, dmarc: null, hasSPF: false, hasDMARC: false };
 
 	try {
 		// === ALL PHASES IN PARALLEL: Page fetch + DNS + WHOIS/PTR + Probes + SSL Cert + Reverse IP ===
-		const [pageResult, dnsResult, whoisPtrResult, probesResult, sslResult, reverseIpResult] = await Promise.allSettled([
+		const [pageResult, dnsResult, whoisPtrResult, probesResult, sslResult, reverseIpResult, domainRdapResult, ctSubsResult, bruteSubsResult, dmarcResult] = await Promise.allSettled([
 			// Phase 1: Main page fetch (5s timeout)
 			(async () => {
 				const startTime = Date.now();
@@ -2771,6 +2892,106 @@ async function handleFullRecon(request: Request): Promise<Response> {
 				if (aRecords.length === 0) return [];
 				return reverseIPLookup(aRecords[0].data);
 			})(),
+			// Phase 7: Domain WHOIS via RDAP (same logic as handleDNSRecon)
+			(async () => {
+				try {
+					const rdapResp = await fetchWithTimeout(`https://rdap.org/domain/${encodeURIComponent(reconRootDomain)}`, {
+						headers: { 'Accept': 'application/rdap+json, application/json', 'User-Agent': 'Mozilla/5.0 (compatible; WAF-Checker/1.0)' },
+					}, 5000);
+					if (!rdapResp.ok) return null;
+					const rdap: any = await rdapResp.json();
+
+					const cleanUri = (val: string | null): string | null => {
+						if (!val) return null;
+						return val.replace(/^(tel:|mailto:|sip:)/i, '').trim() || null;
+					};
+					const extractContact = (entity: any) => {
+						const contact: Record<string, string | null> = { name: null, org: null, email: null, phone: null, address: null, country: null };
+						if (!entity?.vcardArray?.[1]) return contact;
+						for (const field of entity.vcardArray[1]) {
+							const key = field[0];
+							const val = field[3];
+							if (key === 'fn') contact.name = (typeof val === 'string' ? val.trim() : null) || null;
+							else if (key === 'org') {
+								const orgVal = Array.isArray(val) ? val[0] : val;
+								contact.org = (typeof orgVal === 'string' ? orgVal.trim() : null) || null;
+							}
+							else if (key === 'email') contact.email = cleanUri(typeof val === 'string' ? val : null);
+							else if (key === 'tel') contact.phone = cleanUri(typeof val === 'string' ? val : (typeof val === 'object' && val?.uri ? val.uri : null));
+							else if (key === 'adr') {
+								const parts = Array.isArray(val) ? val : [];
+								const addrParts = parts.filter((p: any) => p && typeof p === 'string' && p.trim());
+								if (addrParts.length > 0) contact.address = addrParts.join(', ');
+								if (parts.length >= 7 && parts[6] && typeof parts[6] === 'string') contact.country = parts[6].trim();
+							}
+						}
+						if (!contact.name && entity.handle) contact.name = entity.handle;
+						return contact;
+					};
+
+					let registrar: string | null = null;
+					let registrant: Record<string, string | null> | null = null;
+					let adminContact: Record<string, string | null> | null = null;
+					let techContact: Record<string, string | null> | null = null;
+					let abuseContact: Record<string, string | null> | null = null;
+
+					const processEntities = (entities: any[]) => {
+						for (const entity of entities) {
+							const roles: string[] = entity.roles || [];
+							if (roles.includes('registrar')) {
+								registrar = entity.vcardArray?.[1]?.find((v: any) => v[0] === 'fn')?.[3]
+									|| entity.publicIds?.[0]?.identifier || entity.handle || null;
+								if (entity.entities) {
+									for (const sub of entity.entities) {
+										if (sub.roles?.includes('abuse')) abuseContact = extractContact(sub);
+									}
+								}
+							}
+							if (roles.includes('registrant')) registrant = extractContact(entity);
+							if (roles.includes('administrative')) adminContact = extractContact(entity);
+							if (roles.includes('technical')) techContact = extractContact(entity);
+							if (roles.includes('abuse') && !abuseContact) abuseContact = extractContact(entity);
+						}
+					};
+					if (rdap.entities) processEntities(rdap.entities);
+
+					let creationDate: string | null = null;
+					let expirationDate: string | null = null;
+					let lastChanged: string | null = null;
+					if (rdap.events) {
+						for (const ev of rdap.events) {
+							if (ev.eventAction === 'registration') creationDate = ev.eventDate || null;
+							else if (ev.eventAction === 'expiration') expirationDate = ev.eventDate || null;
+							else if (ev.eventAction === 'last changed' || ev.eventAction === 'last update of RDAP database') lastChanged = ev.eventDate || null;
+						}
+					}
+					const status: string[] = rdap.status || [];
+					const rdapNameservers: string[] = (rdap.nameservers || []).map((ns: any) => String(ns.ldhName || '').toLowerCase()).filter((n: string) => n);
+					const domainName = rdap.ldhName || rdap.handle || reconRootDomain;
+					const dnssec = rdap.secureDNS?.delegationSigned === true;
+					const isEmptyContact = (c: Record<string, string | null> | null) => !c || Object.values(c).every(v => !v);
+					return {
+						domainName, registrar,
+						registrant: isEmptyContact(registrant) ? null : registrant,
+						adminContact: isEmptyContact(adminContact) ? null : adminContact,
+						techContact: isEmptyContact(techContact) ? null : techContact,
+						abuseContact: isEmptyContact(abuseContact) ? null : abuseContact,
+						creationDate, expirationDate, lastChanged, status, dnssec,
+						rdapNameservers: rdapNameservers.length > 0 ? rdapNameservers : null,
+					};
+				} catch { return null; }
+			})(),
+			// Phase 8: Certificate Transparency subdomain discovery
+			discoverSubdomainsCT(reconRootDomain),
+			// Phase 9: DNS brute-force subdomain discovery
+			discoverSubdomainsBrute(reconRootDomain),
+			// Phase 10: DMARC record
+			(async () => {
+				try {
+					const dmarcRecs = await resolveDNS(`_dmarc.${hostname}`, 'TXT');
+					return dmarcRecs.length > 0 ? String(dmarcRecs[0].data).replace(/^"|"$/g, '') : null;
+				} catch { return null; }
+			})(),
 		]);
 
 		// === Collect page results & run sync analysis ===
@@ -2866,6 +3087,38 @@ async function handleFullRecon(request: Request): Promise<Response> {
 
 		// === Collect Reverse IP ===
 		if (reverseIpResult.status === 'fulfilled') reverseIpDomains = reverseIpResult.value;
+
+		// === Collect Domain RDAP ===
+		const reconDomainWhois = domainRdapResult.status === 'fulfilled' ? domainRdapResult.value : null;
+
+		// === Collect subdomains ===
+		const ctSubdomains = ctSubsResult.status === 'fulfilled' ? ctSubsResult.value : [];
+		const bruteSubdomains = bruteSubsResult.status === 'fulfilled' ? bruteSubsResult.value : [];
+		const subdomainMap = new Map<string, string>();
+		for (const brute of bruteSubdomains) {
+			subdomainMap.set(brute.subdomain, brute.ip);
+		}
+		for (const ctSub of ctSubdomains) {
+			if (!subdomainMap.has(ctSub)) subdomainMap.set(ctSub, '');
+		}
+		subdomains = Array.from(subdomainMap.entries())
+			.map(([name, ip]) => ({ name, ip, source: bruteSubdomains.some(b => b.subdomain === name) ? (ctSubdomains.includes(name) ? 'DNS + CT' : 'DNS') : 'CT' }))
+			.sort((a, b) => a.name.localeCompare(b.name));
+		subdomainStats = { total: subdomains.length, fromCT: ctSubdomains.length, fromDNS: bruteSubdomains.length };
+
+		// === Extract MX, TXT, Email Security from DNS records ===
+		const mxRecords = dnsRecords['MX'] || [];
+		mailServers = mxRecords.map((r: any) => {
+			const parts = String(r.data).split(' ');
+			return { priority: parseInt(parts[0]) || 0, server: (parts[1] || '').replace(/\.$/, '') };
+		}).sort((a: any, b: any) => a.priority - b.priority);
+
+		const txtRecords = dnsRecords['TXT'] || [];
+		txtValues = txtRecords.map((r: any) => String(r.data).replace(/^"|"$/g, ''));
+
+		const spfRecord = txtValues.find((t: string) => t.startsWith('v=spf1'));
+		const dmarcRecord = dmarcResult.status === 'fulfilled' ? dmarcResult.value : null;
+		emailSecurity = { spf: spfRecord || null, dmarc: dmarcRecord || null, hasSPF: !!spfRecord, hasDMARC: !!dmarcRecord };
 
 		// === PHASE 6: Security headers (from phase 1 data) ===
 		const securityHeadersList = ['content-security-policy', 'strict-transport-security', 'x-frame-options', 'x-content-type-options', 'referrer-policy', 'permissions-policy'];
@@ -3098,7 +3351,13 @@ async function handleFullRecon(request: Request): Promise<Response> {
 				reverseDns,
 				reverseIpDomains,
 				infrastructure,
+				domainWhois: reconDomainWhois,
 				whois: whoisData,
+				mailServers,
+				txtRecords: txtValues,
+				emailSecurity,
+				subdomains,
+				subdomainStats,
 				probes: probeResults,
 				securityHeaders,
 				securityHeadersScore: `${securityScore}/${securityHeadersList.length}`,

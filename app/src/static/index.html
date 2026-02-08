@@ -165,7 +165,7 @@
 								HTTP Tests
 							</button>
 						</div>
-						<div class="grid grid-cols-3 gap-2">
+						<div class="grid grid-cols-2 gap-2">
 							<button type="button" onclick="runFullRecon()"
 									class="border border-emerald-500/50 text-emerald-400 py-1.5 rounded-lg hover:bg-emerald-500/20 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
 								Full Recon
@@ -173,10 +173,6 @@
 							<button type="button" onclick="runSecurityHeaders()"
 									class="border border-purple-500/50 text-purple-400 py-1.5 rounded-lg hover:bg-purple-500/20 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
 								Headers
-							</button>
-							<button type="button" onclick="runDNSRecon()"
-									class="border border-cyan-500/50 text-cyan-400 py-1.5 rounded-lg hover:bg-cyan-500/20 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
-								DNS/WHOIS
 							</button>
 						</div>
 					</div>
@@ -394,7 +390,7 @@
 										<svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
 										<span class="text-emerald-400 text-xs font-bold uppercase">Full Recon</span>
 									</div>
-									<p class="text-[11px] text-gray-400">CMS, technologies, DNS, WHOIS, SSL, subdomains &amp; more</p>
+									<p class="text-[11px] text-gray-400">CMS, technologies, DNS, WHOIS, SSL, subdomains, email security &amp; more</p>
 								</div>
 								<div class="bg-cyber-elevated/50 border border-purple-500/10 rounded-lg p-3">
 									<div class="flex items-center gap-1.5 mb-1">
@@ -402,20 +398,6 @@
 										<span class="text-purple-400 text-xs font-bold uppercase">Security Headers</span>
 									</div>
 									<p class="text-[11px] text-gray-400">Audit CSP, HSTS, X-Frame-Options &amp; more</p>
-								</div>
-								<div class="bg-cyber-elevated/50 border border-cyan-500/10 rounded-lg p-3">
-									<div class="flex items-center gap-1.5 mb-1">
-										<svg class="w-3.5 h-3.5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
-										<span class="text-cyan-400 text-xs font-bold uppercase">DNS / WHOIS</span>
-									</div>
-									<p class="text-[11px] text-gray-400">DNS records, WHOIS, reverse IP &amp; subdomains</p>
-								</div>
-								<div class="bg-cyber-elevated/50 border border-cyber-accent/10 rounded-lg p-3">
-									<div class="flex items-center gap-1.5 mb-1">
-										<svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-										<span class="text-gray-400 text-xs font-bold uppercase">Scan History</span>
-									</div>
-									<p class="text-[11px] text-gray-400">Save &amp; review past scan results locally</p>
 								</div>
 							</div>
 							
@@ -545,8 +527,8 @@
 											</div>
 										</div>
 
-										<!-- What are payloads -->
-										<div class="bg-cyber-elevated/50 border border-cyber-accent/20 rounded-xl p-4 mb-4">
+									<!-- What are payloads -->
+									<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl p-4 mb-4">
 											<h4 class="text-sm font-bold text-cyber-accent mb-2 flex items-center gap-2">
 												<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
 												What are payloads?
@@ -557,8 +539,8 @@
 											</p>
 										</div>
 
-										<!-- How to use -->
-										<div class="bg-cyber-elevated/50 border border-cyber-accent/20 rounded-xl p-4 mb-4">
+									<!-- How to use -->
+									<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl p-4 mb-4">
 											<h4 class="text-sm font-bold text-cyber-accent mb-3 flex items-center gap-2">
 												<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
 												How to customize
@@ -583,8 +565,8 @@
 											</ul>
 										</div>
 
-										<!-- Badges explanation -->
-										<div class="bg-cyber-elevated/50 border border-cyber-accent/20 rounded-xl p-4 mb-6">
+									<!-- Badges explanation -->
+									<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl p-4 mb-6">
 											<h4 class="text-sm font-bold text-cyber-accent mb-3">Category badges</h4>
 											<div class="grid grid-cols-2 gap-2 text-xs">
 												<div class="flex items-center gap-2">
