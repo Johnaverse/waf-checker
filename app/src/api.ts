@@ -2097,8 +2097,18 @@ const TECH_PATTERNS: Array<{ name: string; category: string; detect: (headers: H
 		return null;
 	}},
 	// CDN/Infra
-	{ name: 'Cloudflare', category: 'CDN/WAF', detect: (h) => {
-		if (h.get('cf-ray') || h.get('server')?.toLowerCase().includes('cloudflare')) return 'Cloudflare headers (cf-ray)';
+	// NOTE: Cloudflare detection is handled separately in Full Recon to cross-reference with DNS.
+	// For standalone tech detection, require strong signals only (not cf-ray alone, which can be injected by Worker proxy).
+	{ name: 'Cloudflare', category: 'CDN/WAF', detect: (h, html) => {
+		const server = h.get('server')?.toLowerCase() || '';
+		const hasCfServer = server.includes('cloudflare');
+		const hasCfCacheStatus = !!h.get('cf-cache-status');
+		const hasCfRay = !!h.get('cf-ray');
+		const hasCloudflareHTML = html.includes('challenges.cloudflare.com') || html.includes('__cf_bm') || html.includes('cf-browser-verification');
+		// Require server:cloudflare + at least one more indicator, or HTML evidence
+		if (hasCfServer && (hasCfRay || hasCfCacheStatus)) return `Server: cloudflare + ${hasCfCacheStatus ? 'cf-cache-status' : 'cf-ray'}`;
+		if (hasCloudflareHTML) return 'Cloudflare challenge/scripts in HTML';
+		// cf-ray alone is NOT enough (Cloudflare Workers add it to all proxied responses)
 		return null;
 	}},
 	{ name: 'Akamai', category: 'CDN', detect: (h) => {
@@ -2822,6 +2832,20 @@ async function handleFullRecon(request: Request): Promise<Response> {
 			ipv6Addresses = (dnsRecords['AAAA'] || []).map((r: any) => r.data);
 			nameservers = (dnsRecords['NS'] || []).map((r: any) => String(r.data).replace(/\.$/, ''));
 			infrastructure = detectInfraFromRecords(dnsRecords);
+
+			// Cross-reference: remove Cloudflare from technologies if DNS doesn't confirm it
+			const dnsConfirmsCF = nameservers.some(ns => /cloudflare/i.test(ns))
+				|| (dnsRecords['CNAME'] || []).some((r: any) => /cloudflare/i.test(String(r.data || '')));
+			if (!dnsConfirmsCF) {
+				const cfIdx = technologies.findIndex(t => t.name === 'Cloudflare' && t.category === 'CDN/WAF');
+				if (cfIdx !== -1) {
+					// Only keep Cloudflare if it was detected via HTML (not just headers which may be Worker-injected)
+					const ev = technologies[cfIdx].evidence || '';
+					if (!ev.includes('HTML') && !ev.includes('challenge') && !ev.includes('script')) {
+						technologies.splice(cfIdx, 1);
+					}
+				}
+			}
 		}
 
 		// === Collect WHOIS + PTR ===
@@ -2849,9 +2873,195 @@ async function handleFullRecon(request: Request): Promise<Response> {
 		for (const h of securityHeadersList) securityHeaders[h] = mainHeaders.get(h);
 		const securityScore = Object.values(securityHeaders).filter(v => v !== null).length;
 
-		// === PHASE 7: SSL ===
+		// === PHASE 7: SSL / TLS deep analysis ===
 		const isHttps = parsedTarget.protocol === 'https:';
 		const hstsHeader = mainHeaders.get('strict-transport-security');
+
+		// Parse HSTS header into structured data
+		let hstsParsed: any = null;
+		if (hstsHeader) {
+			const maxAgeMatch = hstsHeader.match(/max-age=(\d+)/i);
+			hstsParsed = {
+				raw: hstsHeader,
+				maxAge: maxAgeMatch ? parseInt(maxAgeMatch[1], 10) : null,
+				includeSubDomains: /includesubdomains/i.test(hstsHeader),
+				preload: /preload/i.test(hstsHeader),
+			};
+		}
+
+		// HTTP → HTTPS redirect test (run in parallel, quick check)
+		let httpRedirect: any = { tested: false, redirects: false, redirectUrl: null, statusCode: null };
+		try {
+			const httpUrl = `http://${hostname}/`;
+			const rResp = await fetchWithTimeout(httpUrl, { redirect: 'manual', headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WAF-Checker/1.0)' } }, 4000);
+			httpRedirect.tested = true;
+			httpRedirect.statusCode = rResp.status;
+			const location = rResp.headers.get('location') || '';
+			if (rResp.status >= 300 && rResp.status < 400 && location.startsWith('https://')) {
+				httpRedirect.redirects = true;
+				httpRedirect.redirectUrl = location;
+			}
+		} catch { httpRedirect.tested = true; }
+
+		// Mixed content detection (scan HTML for http:// resources)
+		const mixedContent: string[] = [];
+		if (mainHtml && isHttps) {
+			const httpPatterns = mainHtml.matchAll(/(?:src|href|action|poster|data)\s*=\s*["'](http:\/\/[^"']+)["']/gi);
+			const seen = new Set<string>();
+			for (const m of httpPatterns) {
+				const url = m[1];
+				if (!seen.has(url) && !url.includes('localhost') && !url.includes('127.0.0.1')) {
+					seen.add(url);
+					mixedContent.push(url);
+				}
+				if (mixedContent.length >= 20) break;
+			}
+		}
+
+		// Extract additional info from response headers
+		const serverHeader = mainHeaders.get('server') || null;
+		const altSvc = mainHeaders.get('alt-svc') || null;
+
+		// TLS / Protocol detection from headers + CDN knowledge
+		const tlsInfo: { protocols: Array<{ name: string; supported: boolean | null; note: string }>; http2: boolean | null; http3: boolean | null; alpn: string | null } = {
+			protocols: [],
+			http2: null,
+			http3: null,
+			alpn: null,
+		};
+
+		// HTTP/3 detection via Alt-Svc header (h3 = HTTP/3 over QUIC = TLS 1.3)
+		if (altSvc) {
+			tlsInfo.alpn = altSvc;
+			if (altSvc.includes('h3')) {
+				tlsInfo.http3 = true;
+			}
+			if (altSvc.includes('h2')) {
+				tlsInfo.http2 = true;
+			}
+		}
+
+		// HTTP/2 detection from via header or other indicators
+		const viaHeader = mainHeaders.get('via') || '';
+		if (viaHeader.includes('2') || viaHeader.includes('HTTP/2')) {
+			tlsInfo.http2 = true;
+		}
+
+		// Infer TLS support from CDN/infrastructure knowledge
+		const infraProviders = infrastructure.map(i => i.provider.toLowerCase());
+		const isCloudflare = infraProviders.includes('cloudflare') || nameservers.some(ns => /cloudflare/i.test(ns));
+		const isAkamai = infraProviders.includes('akamai');
+		const isAWS = infraProviders.includes('aws');
+		const isFastly = infraProviders.includes('fastly');
+		const isVercel = infraProviders.includes('vercel');
+		const isNetlify = infraProviders.includes('netlify');
+		const isMajorCDN = isCloudflare || isAkamai || isAWS || isFastly || isVercel || isNetlify;
+
+		if (isHttps && mainStatus && mainStatus > 0) {
+			// TLS 1.3
+			if (tlsInfo.http3) {
+				tlsInfo.protocols.push({ name: 'TLS 1.3', supported: true, note: 'Confirmed — HTTP/3 (h3) requires TLS 1.3' });
+			} else if (isCloudflare || isFastly || isVercel || isNetlify) {
+				tlsInfo.protocols.push({ name: 'TLS 1.3', supported: true, note: `Enabled by default on ${isCloudflare ? 'Cloudflare' : isFastly ? 'Fastly' : isVercel ? 'Vercel' : 'Netlify'}` });
+			} else if (isMajorCDN) {
+				tlsInfo.protocols.push({ name: 'TLS 1.3', supported: null, note: 'Likely supported by CDN — verify in server config' });
+			} else {
+				tlsInfo.protocols.push({ name: 'TLS 1.3', supported: null, note: 'Check server config — recommended to enable' });
+			}
+
+			// TLS 1.2
+			tlsInfo.protocols.push({ name: 'TLS 1.2', supported: true, note: 'HTTPS connection succeeded — TLS 1.2 minimum' });
+
+			// TLS 1.1 & 1.0
+			if (isCloudflare) {
+				tlsInfo.protocols.push({ name: 'TLS 1.1', supported: false, note: 'Disabled by Cloudflare (since June 2024)' });
+				tlsInfo.protocols.push({ name: 'TLS 1.0', supported: false, note: 'Disabled by Cloudflare (since June 2024)' });
+			} else if (isFastly || isVercel || isNetlify) {
+				tlsInfo.protocols.push({ name: 'TLS 1.1', supported: false, note: `Disabled by default on ${isFastly ? 'Fastly' : isVercel ? 'Vercel' : 'Netlify'}` });
+				tlsInfo.protocols.push({ name: 'TLS 1.0', supported: false, note: `Disabled by default on ${isFastly ? 'Fastly' : isVercel ? 'Vercel' : 'Netlify'}` });
+			} else {
+				tlsInfo.protocols.push({ name: 'TLS 1.1', supported: null, note: 'Deprecated — should be disabled' });
+				tlsInfo.protocols.push({ name: 'TLS 1.0', supported: null, note: 'Deprecated — should be disabled' });
+			}
+		}
+
+		// Extract certificate algorithm from issuer
+		let certAlgorithm: string | null = null;
+		if (sslCertificate?.issuer) {
+			const issuerLc = sslCertificate.issuer.toLowerCase();
+			if (issuerLc.includes('ecdsa') || issuerLc.includes('ec ') || issuerLc.includes('e1') || issuerLc.includes('e5') || issuerLc.includes('e6')) certAlgorithm = 'ECDSA';
+			else if (issuerLc.includes('rsa') || issuerLc.includes('r3') || issuerLc.includes('r4') || issuerLc.includes('r10') || issuerLc.includes('r11')) certAlgorithm = 'RSA';
+		}
+
+		// Determine SSL/TLS security score
+		let sslScore = 0;
+		const sslChecks: Array<{ test: string; status: 'ok' | 'warning' | 'fail' | 'info'; detail: string }> = [];
+
+		// Check HTTPS
+		if (isHttps) { sslScore += 20; sslChecks.push({ test: 'HTTPS', status: 'ok', detail: 'Connection is encrypted via HTTPS' }); }
+		else { sslChecks.push({ test: 'HTTPS', status: 'fail', detail: 'Site does not use HTTPS — all traffic is unencrypted' }); }
+
+		// Check HTTP→HTTPS redirect
+		if (httpRedirect.redirects) { sslScore += 15; sslChecks.push({ test: 'HTTP → HTTPS Redirect', status: 'ok', detail: `HTTP redirects to HTTPS (${httpRedirect.statusCode})` }); }
+		else if (httpRedirect.tested && httpRedirect.statusCode) { sslChecks.push({ test: 'HTTP → HTTPS Redirect', status: 'fail', detail: `HTTP does not redirect to HTTPS (status ${httpRedirect.statusCode})` }); }
+		else { sslChecks.push({ test: 'HTTP → HTTPS Redirect', status: 'warning', detail: 'Could not test HTTP redirect' }); }
+
+		// Check HSTS
+		if (hstsParsed) {
+			if (hstsParsed.maxAge && hstsParsed.maxAge >= 31536000) {
+				sslScore += 20;
+				sslChecks.push({ test: 'HSTS', status: 'ok', detail: `Configured with max-age=${hstsParsed.maxAge} (≥ 1 year)` });
+			} else if (hstsParsed.maxAge && hstsParsed.maxAge > 0) {
+				sslScore += 10;
+				sslChecks.push({ test: 'HSTS', status: 'warning', detail: `max-age=${hstsParsed.maxAge} — recommended: 31536000 (1 year) or more` });
+			} else {
+				sslChecks.push({ test: 'HSTS', status: 'warning', detail: 'HSTS header present but max-age is missing or 0' });
+			}
+			if (hstsParsed.includeSubDomains) { sslScore += 10; sslChecks.push({ test: 'HSTS includeSubDomains', status: 'ok', detail: 'All subdomains enforce HTTPS' }); }
+			else { sslChecks.push({ test: 'HSTS includeSubDomains', status: 'warning', detail: 'Subdomains not included — consider adding includeSubDomains' }); }
+			if (hstsParsed.preload) { sslScore += 10; sslChecks.push({ test: 'HSTS Preload', status: 'ok', detail: 'Eligible for browser HSTS preload list' }); }
+			else { sslChecks.push({ test: 'HSTS Preload', status: 'info', detail: 'Not preloaded — consider adding preload directive' }); }
+		} else {
+			sslChecks.push({ test: 'HSTS', status: 'fail', detail: 'No Strict-Transport-Security header — browsers can be SSL-stripped' });
+		}
+
+		// Check certificate validity
+		if (sslCertificate) {
+			sslScore += 15;
+			const notAfter = sslCertificate.notAfter ? new Date(sslCertificate.notAfter) : null;
+			const daysLeft = notAfter ? Math.ceil((notAfter.getTime() - Date.now()) / 86400000) : null;
+			if (daysLeft !== null && daysLeft > 30) {
+				sslChecks.push({ test: 'Certificate Validity', status: 'ok', detail: `Valid for ${daysLeft} more days` });
+			} else if (daysLeft !== null && daysLeft > 0) {
+				sslChecks.push({ test: 'Certificate Validity', status: 'warning', detail: `Expires in ${daysLeft} days — renewal needed soon` });
+			} else if (daysLeft !== null) {
+				sslChecks.push({ test: 'Certificate Validity', status: 'fail', detail: 'Certificate has expired' });
+			}
+			if (certAlgorithm === 'ECDSA') { sslScore += 10; sslChecks.push({ test: 'Key Algorithm', status: 'ok', detail: 'ECDSA — modern and efficient' }); }
+			else if (certAlgorithm === 'RSA') { sslChecks.push({ test: 'Key Algorithm', status: 'info', detail: 'RSA — widely compatible' }); }
+		} else {
+			sslChecks.push({ test: 'Certificate', status: 'warning', detail: 'Certificate details not available from CT logs' });
+		}
+
+		// Check mixed content
+		if (mixedContent.length === 0 && isHttps) { sslScore += 10; sslChecks.push({ test: 'Mixed Content', status: 'ok', detail: 'No HTTP resources detected on HTTPS page' }); }
+		else if (mixedContent.length > 0) { sslChecks.push({ test: 'Mixed Content', status: 'fail', detail: `${mixedContent.length} insecure HTTP resource(s) found on HTTPS page` }); }
+
+		// TLS Protocol checks
+		if (tlsInfo.http3) {
+			sslChecks.push({ test: 'HTTP/3 (QUIC)', status: 'ok', detail: 'HTTP/3 supported — uses TLS 1.3 natively' });
+		}
+		if (tlsInfo.http2) {
+			sslChecks.push({ test: 'HTTP/2', status: 'ok', detail: 'HTTP/2 supported (ALPN)' });
+		} else if (tlsInfo.http2 === null && isHttps) {
+			sslChecks.push({ test: 'HTTP/2', status: 'info', detail: 'Cannot determine HTTP/2 support from headers' });
+		}
+
+		// Cap score at 100
+		sslScore = Math.min(sslScore, 100);
+
+		// Determine SSL grade
+		const sslGrade = sslScore >= 90 ? 'A+' : sslScore >= 80 ? 'A' : sslScore >= 70 ? 'B' : sslScore >= 50 ? 'C' : sslScore >= 30 ? 'D' : 'F';
 
 		// === PHASE 8: Cookies ===
 		const setCookieHeaders = responseHeaders['set-cookie'];
@@ -2892,7 +3102,20 @@ async function handleFullRecon(request: Request): Promise<Response> {
 				probes: probeResults,
 				securityHeaders,
 				securityHeadersScore: `${securityScore}/${securityHeadersList.length}`,
-				ssl: { isHttps, hsts: hstsHeader || null, certificate: sslCertificate },
+				ssl: {
+					isHttps,
+					hsts: hstsHeader || null,
+					hstsParsed,
+					httpRedirect,
+					mixedContent,
+					tlsInfo,
+					serverHeader,
+					certAlgorithm,
+					certificate: sslCertificate,
+					score: sslScore,
+					grade: sslGrade,
+					checks: sslChecks,
+				},
 				cookies,
 				responseHeaders,
 				timestamp: new Date().toISOString(),

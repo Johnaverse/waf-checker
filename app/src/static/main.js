@@ -2052,8 +2052,26 @@ function toggleAllCategories() {
 	}
 }
 
+// Store original homepage content for goHome()
+let _homePlaceholderHTML = '';
+
+function goHome() {
+	const resultsDiv = document.getElementById('results');
+	if (resultsDiv && _homePlaceholderHTML) {
+		resultsDiv.innerHTML = _homePlaceholderHTML;
+	}
+	// Reset progress bar
+	const progressContainer = document.getElementById('progressContainer');
+	if (progressContainer) progressContainer.style.display = 'none';
+	window.scrollTo(0, 0);
+}
+
 // Initialize application
 function initApp() {
+	// Save the original homepage placeholder
+	const homeResults = document.getElementById('results');
+	if (homeResults) _homePlaceholderHTML = homeResults.innerHTML;
+
 	// Force dark theme
 	document.body.setAttribute('data-theme', 'dark');
 	// Load payload categories dynamically from GitHub (via backend)
@@ -5645,8 +5663,177 @@ function displayFullReconResults(data) {
 				<div class="bg-cyber-card p-3 col-span-2"><span class="text-[10px] text-gray-500 uppercase block">Description</span><span class="text-xs text-gray-300">${escapeHtml(data.pageInfo?.description || 'N/A')}</span></div>
 				${data.pageMeta?.language ? `<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Language</span><span class="text-sm text-white font-mono">${escapeHtml(data.pageMeta.language)}</span></div>` : ''}
 				${data.pageMeta?.canonical ? `<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Canonical</span><span class="text-xs text-gray-300 break-all">${escapeHtml(data.pageMeta.canonical)}</span></div>` : ''}
+		</div>
+	</div>`;
+
+	// SSL / TLS Security Analysis (right after Page Information)
+	const ssl = data.ssl || {};
+	const cert = ssl.certificate;
+	const sslChecks = ssl.checks || [];
+	const sslGrade = ssl.grade || 'N/A';
+	const sslScore = ssl.score || 0;
+
+	const statusBadge = (s) => {
+		if (s === 'ok') return '<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 whitespace-nowrap">OK</span>';
+		if (s === 'warning') return '<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 whitespace-nowrap">WARNING</span>';
+		if (s === 'fail') return '<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-red-500/20 text-red-400 border border-red-500/30 whitespace-nowrap">FAIL</span>';
+		return '<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 whitespace-nowrap">INFO</span>';
+	};
+
+	const gradeColor = sslScore >= 90 ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' :
+		sslScore >= 70 ? 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10' :
+		sslScore >= 50 ? 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10' :
+		'text-red-400 border-red-500/30 bg-red-500/10';
+
+	html += `<div class="bg-cyber-card border border-emerald-500/20 rounded-xl overflow-hidden mb-4">
+		<div class="px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-500/5 flex items-center justify-between">
+			<div class="flex items-center">
+				<h4 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">SSL / TLS Security</h4>
+				${reconTip('Comprehensive SSL/TLS security analysis: HTTPS enforcement, HTTP→HTTPS redirect, HSTS policy, certificate details, mixed content detection, and overall security score.')}
+			</div>
+			<div class="flex items-center gap-2">
+				<span class="text-[10px] text-gray-500">${sslScore}/100</span>
+				<span class="text-lg font-bold px-2.5 py-0.5 rounded-lg border ${gradeColor}">${sslGrade}</span>
 			</div>
 		</div>`;
+
+	// Security Checks (sxtlscheck-style)
+	if (sslChecks.length > 0) {
+		html += `<div class="divide-y divide-emerald-500/10">`;
+		for (const check of sslChecks) {
+			html += `<div class="flex items-center justify-between px-4 py-2 hover:bg-cyber-elevated/30 transition-colors">
+				<div class="flex items-center gap-3">
+					${statusBadge(check.status)}
+					<span class="text-xs text-white font-bold">${escapeHtml(check.test)}</span>
+				</div>
+				<span class="text-[11px] text-gray-400 text-right max-w-[60%]">${escapeHtml(check.detail)}</span>
+			</div>`;
+		}
+		html += `</div>`;
+	}
+
+	// TLS Protocols
+	if (ssl.tlsInfo?.protocols && ssl.tlsInfo.protocols.length > 0) {
+		html += `<div class="border-t border-emerald-500/20">
+			<div class="px-4 py-2 bg-emerald-500/5">
+				<h5 class="text-[10px] font-bold text-emerald-400/70 uppercase tracking-wider flex items-center">Protocols${reconTip('TLS protocol version support. TLS 1.3 is the latest and most secure. TLS 1.0/1.1 are deprecated and should be disabled. HTTP/3 runs over QUIC and requires TLS 1.3.')}</h5>
+			</div>
+			<div class="divide-y divide-emerald-500/10">`;
+		for (const proto of ssl.tlsInfo.protocols) {
+			const badge = proto.supported === true
+				? '<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 whitespace-nowrap">SUPPORTED</span>'
+				: proto.supported === false
+				? '<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-red-500/20 text-red-400 border border-red-500/30 whitespace-nowrap">DISABLED</span>'
+				: '<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-gray-500/20 text-gray-400 border border-gray-500/30 whitespace-nowrap">UNKNOWN</span>';
+			const nameColor = (proto.name === 'TLS 1.0' || proto.name === 'TLS 1.1') ? 'text-gray-500' : 'text-white';
+			html += `<div class="flex items-center justify-between px-4 py-1.5">
+				<div class="flex items-center gap-3">
+					${badge}
+					<span class="text-xs font-bold ${nameColor}">${escapeHtml(proto.name)}</span>
+					${(proto.name === 'TLS 1.0' || proto.name === 'TLS 1.1') ? '<span class="text-[8px] px-1 py-0.5 rounded bg-red-500/10 text-red-400/70 border border-red-500/20 font-bold">DEPRECATED</span>' : ''}
+				</div>
+				<span class="text-[10px] text-gray-500 text-right">${escapeHtml(proto.note)}</span>
+			</div>`;
+		}
+		if (ssl.tlsInfo.http3) {
+			html += `<div class="flex items-center justify-between px-4 py-1.5">
+				<div class="flex items-center gap-3">
+					<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">SUPPORTED</span>
+					<span class="text-xs font-bold text-white">HTTP/3 (QUIC)</span>
+				</div>
+				<span class="text-[10px] text-gray-500">Advertised via Alt-Svc header</span>
+			</div>`;
+		}
+		if (ssl.tlsInfo.http2 && !ssl.tlsInfo.http3) {
+			html += `<div class="flex items-center justify-between px-4 py-1.5">
+				<div class="flex items-center gap-3">
+					<span class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">SUPPORTED</span>
+					<span class="text-xs font-bold text-white">HTTP/2</span>
+				</div>
+				<span class="text-[10px] text-gray-500">Detected via ALPN</span>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// Certificate Details
+	if (cert) {
+		const issuerCN = cert.issuer ? (cert.issuer.match(/CN=([^,]+)/)?.[1] || '').trim() : '';
+		const issuerOrg = cert.issuer ? (cert.issuer.match(/O=([^,]+)/)?.[1] || '').trim() : '';
+		const notAfter = cert.notAfter ? new Date(cert.notAfter) : null;
+		const notBefore = cert.notBefore ? new Date(cert.notBefore) : null;
+		const daysLeft = notAfter ? Math.ceil((notAfter.getTime() - Date.now()) / 86400000) : null;
+		const validityColor = daysLeft === null ? 'text-gray-600' : daysLeft > 30 ? 'text-emerald-400' : daysLeft > 0 ? 'text-yellow-400' : 'text-red-400';
+		const totalDays = (notBefore && notAfter) ? Math.ceil((notAfter.getTime() - notBefore.getTime()) / 86400000) : null;
+
+		html += `<div class="border-t border-emerald-500/20">
+			<div class="px-4 py-2 bg-emerald-500/5">
+				<h5 class="text-[10px] font-bold text-emerald-400/70 uppercase tracking-wider">Certificate</h5>
+			</div>
+			<div class="grid grid-cols-2 gap-px bg-emerald-500/5">
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">Subject (CN)</span>
+					<code class="text-xs text-white font-mono font-bold">${escapeHtml(cert.subject || data.hostname)}</code>
+				</div>
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">Issuer</span>
+					<span class="text-xs text-white font-bold">${escapeHtml(issuerOrg || issuerCN || 'Unknown')}</span>
+					${issuerCN && issuerOrg ? `<div class="text-[10px] text-gray-500 font-mono mt-0.5">CN=${escapeHtml(issuerCN)}</div>` : ''}
+				</div>
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">Valid From</span>
+					<code class="text-xs text-white font-mono">${notBefore ? notBefore.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}</code>
+				</div>
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">Valid Until</span>
+					<code class="text-xs font-mono ${validityColor}">${notAfter ? notAfter.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}</code>
+					${daysLeft !== null ? `<span class="text-[10px] ${validityColor} ml-1">(${daysLeft > 0 ? daysLeft + 'd left' : 'EXPIRED'})</span>` : ''}
+				</div>
+				${ssl.certAlgorithm ? `<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">Key Algorithm</span>
+					<span class="text-xs font-bold ${ssl.certAlgorithm === 'ECDSA' ? 'text-emerald-400' : 'text-cyan-400'}">${ssl.certAlgorithm}</span>
+				</div>` : ''}
+				${totalDays ? `<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">Duration</span>
+					<span class="text-xs text-white font-mono">${totalDays} days</span>
+				</div>` : ''}
+			</div>`;
+		if (cert.serialNumber) {
+			html += `<div class="px-4 py-2 border-t border-emerald-500/10">
+				<span class="text-[10px] text-gray-500 uppercase">Serial Number</span>
+				<code class="text-[10px] text-gray-400 font-mono break-all ml-2">${escapeHtml(cert.serialNumber)}</code>
+			</div>`;
+		}
+		if (cert.domains && cert.domains.length > 0) {
+			html += `<div class="px-4 py-2 border-t border-emerald-500/10">
+				<span class="text-[10px] text-gray-500 uppercase block mb-1">SAN DNS Names (${cert.domains.length})</span>
+				<div class="flex flex-wrap gap-1">${cert.domains.map(d => `<code class="text-[10px] font-mono text-emerald-400/70 px-1.5 py-0.5 bg-emerald-500/10 rounded">${escapeHtml(d)}</code>`).join('')}</div>
+			</div>`;
+		}
+		html += `</div>`;
+	}
+
+	// Mixed Content
+	if (ssl.mixedContent && ssl.mixedContent.length > 0) {
+		html += `<div class="border-t border-red-500/20">
+			<div class="px-4 py-2 bg-red-500/5">
+				<h5 class="text-[10px] font-bold text-red-400/70 uppercase tracking-wider">Mixed Content (${ssl.mixedContent.length} insecure resource${ssl.mixedContent.length > 1 ? 's' : ''})</h5>
+			</div>
+			<div class="px-4 py-2 space-y-1">
+				${ssl.mixedContent.map(url => `<code class="block text-[10px] font-mono text-red-400/80 break-all">${escapeHtml(url)}</code>`).join('')}
+			</div>
+		</div>`;
+	}
+
+	// Server & Protocol info footer
+	html += `<div class="border-t border-emerald-500/10">
+		<div class="px-4 py-2 flex flex-wrap gap-3">
+			${ssl.serverHeader ? `<div class="flex items-center gap-1.5"><span class="text-[10px] text-gray-500">Server:</span><code class="text-[10px] font-mono text-white">${escapeHtml(ssl.serverHeader)}</code></div>` : ''}
+			${ssl.tlsInfo?.alpn ? `<div class="flex items-center gap-1.5"><span class="text-[10px] text-gray-500">Alt-Svc:</span><code class="text-[10px] font-mono text-gray-400 break-all">${escapeHtml(ssl.tlsInfo.alpn)}</code></div>` : ''}
+		</div>
+	</div>`;
+
+	html += `</div>`;
 
 	// Technologies
 	if (data.technologies && data.technologies.length > 0) {
@@ -5931,75 +6118,7 @@ function displayFullReconResults(data) {
 		html += `</div></div>`;
 	}
 
-	// SSL / TLS + Certificate
-	const cert = data.ssl?.certificate;
-	html += `<div class="bg-cyber-card border border-emerald-500/20 rounded-xl overflow-hidden mb-4">
-		<div class="px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-500/5 flex items-center">
-			<h4 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">SSL / TLS</h4>
-			${reconTip('SSL/TLS encryption status, HSTS header, and certificate details retrieved from Certificate Transparency logs (crt.sh). Shows issuer (CA), validity dates, and Subject Alternative Names (SANs).')}
-		</div>
-		<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-emerald-500/10">
-			<div class="bg-cyber-card p-3">
-				<span class="text-[10px] text-gray-500 uppercase block">HTTPS</span>
-				<span class="text-sm font-bold ${data.ssl?.isHttps ? 'text-cyber-success' : 'text-cyber-danger'}">${data.ssl?.isHttps ? 'Enabled' : 'Disabled'}</span>
-			</div>
-			<div class="bg-cyber-card p-3">
-				<span class="text-[10px] text-gray-500 uppercase block">HSTS</span>
-				<span class="text-xs font-mono ${data.ssl?.hsts ? 'text-cyber-success' : 'text-gray-600'}">${data.ssl?.hsts ? 'Configured' : 'Not set'}</span>
-			</div>`;
-	if (cert) {
-		// Parse issuer for display
-		const issuerName = cert.issuer ? (cert.issuer.match(/O=([^,]+)/)?.[1] || cert.issuer.match(/CN=([^,]+)/)?.[1] || cert.issuer).trim() : 'Unknown';
-		// Check validity
-		const notAfter = cert.notAfter ? new Date(cert.notAfter) : null;
-		const daysLeft = notAfter ? Math.ceil((notAfter.getTime() - Date.now()) / 86400000) : null;
-		const validityColor = daysLeft === null ? 'text-gray-600' : daysLeft > 30 ? 'text-cyber-success' : daysLeft > 0 ? 'text-yellow-400' : 'text-cyber-danger';
-		const validityText = daysLeft === null ? 'Unknown' : daysLeft > 0 ? `${daysLeft} days left` : 'Expired';
-
-		html += `
-			<div class="bg-cyber-card p-3">
-				<span class="text-[10px] text-gray-500 uppercase block">Issuer (CA)</span>
-				<span class="text-xs text-white font-bold">${escapeHtml(issuerName)}</span>
-			</div>
-			<div class="bg-cyber-card p-3">
-				<span class="text-[10px] text-gray-500 uppercase block">Validity</span>
-				<span class="text-xs font-bold ${validityColor}">${validityText}</span>
-			</div>
-			<div class="bg-cyber-card p-3">
-				<span class="text-[10px] text-gray-500 uppercase block">Not Before</span>
-				<span class="text-xs text-white font-mono">${cert.notBefore ? new Date(cert.notBefore).toLocaleDateString() : 'N/A'}</span>
-			</div>
-			<div class="bg-cyber-card p-3">
-				<span class="text-[10px] text-gray-500 uppercase block">Not After</span>
-				<span class="text-xs text-white font-mono">${cert.notAfter ? new Date(cert.notAfter).toLocaleDateString() : 'N/A'}</span>
-			</div>
-			<div class="bg-cyber-card p-3 col-span-2 md:col-span-4">
-				<span class="text-[10px] text-gray-500 uppercase block">Subject</span>
-				<span class="text-xs text-white font-mono">${escapeHtml(cert.subject || 'N/A')}</span>
-			</div>`;
-		if (cert.domains && cert.domains.length > 0) {
-			html += `<div class="bg-cyber-card p-3 col-span-2 md:col-span-4">
-				<span class="text-[10px] text-gray-500 uppercase block mb-1">Subject Alternative Names (SANs) — ${cert.domains.length}</span>
-				<div class="flex flex-wrap gap-1">${cert.domains.map(d => `<code class="text-[10px] font-mono text-emerald-400/70 px-1.5 py-0.5 bg-emerald-500/10 rounded">${escapeHtml(d)}</code>`).join('')}</div>
-			</div>`;
-		}
-		if (cert.serialNumber) {
-			html += `<div class="bg-cyber-card p-3 col-span-2 md:col-span-4">
-				<span class="text-[10px] text-gray-500 uppercase block">Serial Number</span>
-				<code class="text-[10px] text-gray-400 font-mono break-all">${escapeHtml(cert.serialNumber)}</code>
-			</div>`;
-		}
-	} else {
-		html += `<div class="bg-cyber-card p-3 col-span-2"><span class="text-xs text-gray-500">Certificate details not available</span></div>`;
-	}
-	html += `</div></div>`;
-
-	if (data.ssl?.hsts) {
-		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl p-3 mb-4">
-			<span class="text-[10px] text-gray-500 uppercase flex items-center mb-1">HSTS Header${reconTip('Full Strict-Transport-Security header value. max-age sets the duration browsers remember to use HTTPS. includeSubDomains extends to all subdomains.')}</span>
-			<code class="text-[11px] font-mono text-emerald-400 break-all">${escapeHtml(data.ssl.hsts)}</code>
-		</div>`;
-	}
+	// SSL / TLS section removed from here — moved to after Page Information
 
 	// Cookies
 	if (data.cookies && data.cookies.length > 0) {
