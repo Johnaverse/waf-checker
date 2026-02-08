@@ -9,7 +9,7 @@
   <a href="#"><img src="https://readme-typing-svg.herokuapp.com?center=true&vCenter=true&lines=WAF-CHECKER.COM;"></a>
 </p>
 <div align="center">
-A powerful web application to test how well your **Web Application Firewall (WAF)** protects against common attack vectors.
+A powerful web application to test how well your Web Application Firewall (WAF) protects against common attack vectors.
 
 → [waf-checker.com](https://waf-checker.com) ←
 </div>
@@ -34,6 +34,45 @@ A powerful web application to test how well your **Web Application Firewall (WAF
 - **Advanced bypass techniques** — double encoding, unicode, mixed case, comment obfuscation
 - **WAF-specific bypass generation** — tailored strategies per detected WAF
 - **HTTP manipulation testing** — verb tampering, parameter pollution, content-type confusion, request smuggling
+
+### Full Reconnaissance
+
+![Full Reconnaissance](./img/8-recon.png)
+
+- **Technology fingerprinting** — CMS detection (WordPress, Drupal, Joomla, Shopify…), frameworks, web servers, CDN/WAF, analytics tools, and 25+ JavaScript libraries
+- **DNS analysis** — A, AAAA, CNAME, MX, NS, TXT, SOA records with infrastructure detection
+- **WHOIS & IP geolocation** — ISP, organization, ASN, location, reverse DNS (PTR)
+- **Subdomain discovery** — via Certificate Transparency logs (crt.sh) and DNS brute-force
+- **Reverse IP lookup** — discover all domains hosted on the same IP (shared hosting detection)
+- **SSL/TLS certificate details** — issuer, validity, Subject Alternative Names (SANs), serial number
+- **CMS deep analysis** — WordPress themes, plugins with versions; Drupal modules
+- **Path probing** — robots.txt, sitemap.xml, security.txt, common admin paths
+- **Cookie analysis** — Secure, HttpOnly, SameSite flags
+- **Open Graph & social metadata** extraction
+- **RSS/Atom feeds & email address** discovery
+- **Export results** as JSON, HTML report, or screenshot (PNG)
+
+### Security Headers Audit
+
+![Security Headers Audit](./img/9-headers.png)
+
+- **Grade scoring** (A+ to F) of HTTP security headers
+- **Detailed analysis** of CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy
+- **Information disclosure detection** — server version, powered-by headers, debug headers
+- **Actionable recommendations** for each missing or misconfigured header
+- **Export results** as JSON, HTML report, or screenshot (PNG)
+
+### DNS / WHOIS Intelligence
+
+![DNS / WHOIS Intelligence](./img/10-inspect-dns.png)
+
+- **Complete DNS resolution** — A, AAAA, CNAME, MX, NS, TXT records
+- **WHOIS data** with IP geolocation, ISP, ASN, and reverse DNS
+- **Email security audit** — SPF & DMARC validation
+- **Subdomain enumeration** — Certificate Transparency + DNS brute-force
+- **Reverse IP lookup** — all domains sharing the same IP address
+- **Infrastructure detection** — CDN, email, and DNS providers from record patterns
+- **Export results** as JSON, HTML report, or screenshot (PNG)
 
 ### Real-Time Results
 
@@ -78,25 +117,31 @@ Detailed vulnerability assessment reports with scoring:
 - **Category-level analysis** with bypass rates
 - **Actionable recommendations**
 
-### HTML Report Export
+### Export & Reporting
 
 ![HTML Report](./img/7-report.png)
 
 - Export results as **JSON**, **CSV**, or **HTML** report
 - Professional HTML report with executive summary
 - Per-category vulnerability assessment with scores
-- Screenshot support for sharing
+- Screenshot support for sharing (PNG with branding)
+- All recon/audit features support JSON, HTML, and screenshot export
 
 ### Batch Testing
 - Test **up to 100 URLs** simultaneously
 - Concurrent processing with progress tracking
 - Per-URL results with bypass rate analysis
 
+### Scan History
+- **Automatic saving** of scan results to browser localStorage
+- Browse and review past scans with summary statistics
+- Quick re-scan from history entries
+
 ## Architecture
 
 WAF-Checker is built as a **Cloudflare Worker** with static assets:
 
-- **Backend** (`app/src/api.ts`) — Worker handling API requests, payload delivery, and WAF testing
+- **Backend** (`app/src/api.ts`) — Worker handling API requests, payload delivery, WAF testing, reconnaissance, and DNS/WHOIS lookups
 - **Frontend** (`app/src/static/`) — Single-page app with cyberpunk UI
 - **Payloads** — Loaded dynamically at runtime from [GitHub](https://github.com/PAPAMICA/waf-payloads) to keep the worker bundle clean
 

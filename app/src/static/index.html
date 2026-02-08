@@ -39,44 +39,22 @@
 		<link rel="preconnect" href="https://fonts.googleapis.com" />
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 		<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-		<script src="https://cdn.tailwindcss.com"></script>
-		<script>
-			tailwind.config = {
-				theme: {
-					extend: {
-						colors: {
-							cyber: {
-								bg: '#0a0e14',
-								'bg-secondary': '#0d1117',
-								card: '#161b22',
-								elevated: '#1c2128',
-								accent: '#00d9ff',
-								success: '#00ff9d',
-								danger: '#ff3860',
-								warning: '#ffb347',
-							}
-						},
-						fontFamily: {
-							sans: ['Outfit', 'sans-serif'],
-							mono: ['JetBrains Mono', 'monospace'],
-						}
-					}
-				}
-			}
-		</script>
+		<link href="tailwind.css" rel="stylesheet" />
 		<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
 		<link href="style.css" rel="stylesheet" />
 		<link rel="icon" type="image/svg+xml" href="favicon.svg" />
 	</head>
 	<body class="bg-cyber-bg text-gray-100 font-sans h-screen min-h-[600px] flex flex-col overflow-hidden" data-theme="dark">
 		<!-- Legal Disclaimer Banner -->
-		<div id="disclaimerBanner" class="bg-cyber-warning/15 border-b border-cyber-warning/30 px-4 py-2 flex items-center justify-center gap-3 shrink-0 z-50 relative">
-			<svg class="w-4 h-4 text-cyber-warning shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-			</svg>
-			<p class="text-xs text-cyber-warning/90 text-center leading-snug"><strong class="text-cyber-warning">Disclaimer:</strong> Only use this tool on websites you own or have explicit authorization to test. Unauthorized testing may violate laws and regulations.</p>
-			<button onclick="document.getElementById('disclaimerBanner').remove()" class="absolute right-3 top-1/2 -translate-y-1/2 text-cyber-warning/60 hover:text-cyber-warning transition-colors" aria-label="Dismiss">
-				<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+		<div id="disclaimerBanner" class="bg-gradient-to-r from-cyber-danger/10 via-cyber-warning/10 to-cyber-danger/10 border-b border-cyber-danger/20 px-10 py-1.5 shrink-0 z-50 relative">
+			<div class="flex items-center justify-center gap-2.5">
+				<svg class="w-4 h-4 shrink-0 text-cyber-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+				</svg>
+				<p class="text-[11px] text-gray-400 text-center leading-snug mb-0"><span class="text-cyber-danger font-semibold">Legal notice</span> &mdash; Only test websites you <strong class="text-gray-300">own</strong> or have <strong class="text-gray-300">explicit authorization</strong> to scan. Unauthorized use may violate applicable laws.</p>
+			</div>
+			<button onclick="document.getElementById('disclaimerBanner').remove()" class="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded text-gray-600 hover:text-gray-300 hover:bg-cyber-elevated/50 transition-all" aria-label="Dismiss">
+				<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
 			</button>
 		</div>
 		<!-- Header Bar -->
@@ -102,7 +80,14 @@
 					WAF-CHECKER.COM
 				</h1>
 			</div>
-			<div class="w-48 flex justify-end">
+			<div class="flex justify-end gap-2">
+				<button type="button" onclick="showScanHistory()"
+						class="inline-flex items-center gap-2 px-3 py-1.5 bg-cyber-elevated border border-cyber-accent/20 rounded-full text-gray-400 hover:text-gray-200 hover:border-gray-400 transition-all text-sm">
+					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+					</svg>
+					<span class="hidden md:inline">History</span>
+				</button>
 				<button type="button" onclick="showTestConfigModal()"
 						class="inline-flex items-center gap-2 px-3 py-1.5 bg-cyber-elevated border border-cyber-accent/20 rounded-full text-gray-400 hover:text-cyber-accent hover:border-cyber-accent transition-all text-sm">
 					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -138,7 +123,7 @@
 				</div>
 
 				<!-- Target Configuration -->
-				<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden hover:border-cyber-accent/40 transition-colors" style="min-height:300px">
+				<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden hover:border-cyber-accent/40 transition-colors" style="min-height:330px">
 					<!-- Header with tabs -->
 					<div class="flex items-center border-b border-cyber-accent/20 bg-cyber-elevated/30">
 						<button type="button" id="tabTarget" onclick="switchConfigTab('target')"
@@ -168,14 +153,28 @@
 								class="w-full bg-gradient-to-r from-cyber-accent to-cyan-500 text-cyber-bg font-bold py-3 rounded-lg mb-4 hover:shadow-lg hover:shadow-cyber-accent/40 transition-all uppercase text-sm tracking-wider">
 							Start Check
 						</button>
-						<div class="grid grid-cols-2 gap-3">
+						<div class="grid grid-cols-2 gap-2 mb-2">
 							<button type="button" id="batchTestBtn" onclick="showBatchModal()"
-									class="border-2 border-cyber-success text-cyber-success py-2.5 rounded-lg hover:bg-cyber-success hover:text-cyber-bg transition-all uppercase text-xs font-bold tracking-wide">
+									class="border-2 border-cyber-success text-cyber-success py-2 rounded-lg hover:bg-cyber-success hover:text-cyber-bg transition-all uppercase text-[10px] font-bold tracking-wide">
 								Batch Test
 							</button>
 							<button type="button" id="httpManipulationBtn" onclick="testHTTPManipulation()"
-									class="border-2 border-cyber-warning text-cyber-warning py-2.5 rounded-lg hover:bg-cyber-warning hover:text-cyber-bg transition-all uppercase text-xs font-bold tracking-wide">
+									class="border-2 border-cyber-warning text-cyber-warning py-2 rounded-lg hover:bg-cyber-warning hover:text-cyber-bg transition-all uppercase text-[10px] font-bold tracking-wide">
 								HTTP Tests
+							</button>
+						</div>
+						<div class="grid grid-cols-3 gap-2">
+							<button type="button" onclick="runFullRecon()"
+									class="border border-emerald-500/50 text-emerald-400 py-1.5 rounded-lg hover:bg-emerald-500/20 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
+								Full Recon
+							</button>
+							<button type="button" onclick="runSecurityHeaders()"
+									class="border border-purple-500/50 text-purple-400 py-1.5 rounded-lg hover:bg-purple-500/20 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
+								Headers
+							</button>
+							<button type="button" onclick="runDNSRecon()"
+									class="border border-cyan-500/50 text-cyan-400 py-1.5 rounded-lg hover:bg-cyan-500/20 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
+								DNS/WHOIS
 							</button>
 						</div>
 					</div>
@@ -303,9 +302,10 @@
 					<div class="px-6 py-4">
 						<div class="flex items-center justify-between mb-3">
 							<div class="flex items-center gap-3">
-								<div class="relative">
-									<div class="w-8 h-8 border-3 border-cyber-accent/30 rounded-full"></div>
-									<div class="absolute inset-0 w-8 h-8 border-3 border-cyber-accent border-t-transparent rounded-full animate-spin"></div>
+								<div class="cyber-loader cyber-loader--md text-cyber-accent">
+									<div class="cyber-loader__ring"></div>
+									<div class="cyber-loader__arc"></div>
+									<div class="cyber-loader__dot"></div>
 								</div>
 								<div>
 									<div class="flex items-center gap-2 flex-wrap">
@@ -374,16 +374,46 @@
 							<!-- Features Grid -->
 							<div class="grid grid-cols-2 gap-3 mb-4">
 								<div class="bg-cyber-elevated/50 border border-cyber-accent/10 rounded-lg p-3">
-									<div class="text-cyber-success text-xs font-bold uppercase mb-1">Batch Test</div>
+									<div class="flex items-center gap-1.5 mb-1">
+										<svg class="w-3.5 h-3.5 text-cyber-success" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+										<span class="text-cyber-success text-xs font-bold uppercase">Batch Test</span>
+									</div>
 									<p class="text-[11px] text-gray-400">Test multiple URLs at once (up to 100)</p>
 								</div>
 								<div class="bg-cyber-elevated/50 border border-cyber-accent/10 rounded-lg p-3">
-									<div class="text-cyber-warning text-xs font-bold uppercase mb-1">HTTP Tests</div>
-									<p class="text-[11px] text-gray-400">Test WAF bypass via headers & methods</p>
+									<div class="flex items-center gap-1.5 mb-1">
+										<svg class="w-3.5 h-3.5 text-cyber-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+										<span class="text-cyber-warning text-xs font-bold uppercase">HTTP Tests</span>
+									</div>
+									<p class="text-[11px] text-gray-400">Test WAF bypass via headers &amp; methods</p>
+								</div>
+								<div class="bg-cyber-elevated/50 border border-emerald-500/10 rounded-lg p-3">
+									<div class="flex items-center gap-1.5 mb-1">
+										<svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+										<span class="text-emerald-400 text-xs font-bold uppercase">Full Recon</span>
+									</div>
+									<p class="text-[11px] text-gray-400">CMS, technologies, DNS, WHOIS, SSL, subdomains &amp; more</p>
+								</div>
+								<div class="bg-cyber-elevated/50 border border-purple-500/10 rounded-lg p-3">
+									<div class="flex items-center gap-1.5 mb-1">
+										<svg class="w-3.5 h-3.5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+										<span class="text-purple-400 text-xs font-bold uppercase">Security Headers</span>
+									</div>
+									<p class="text-[11px] text-gray-400">Audit CSP, HSTS, X-Frame-Options &amp; more</p>
+								</div>
+								<div class="bg-cyber-elevated/50 border border-cyan-500/10 rounded-lg p-3">
+									<div class="flex items-center gap-1.5 mb-1">
+										<svg class="w-3.5 h-3.5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
+										<span class="text-cyan-400 text-xs font-bold uppercase">DNS / WHOIS</span>
+									</div>
+									<p class="text-[11px] text-gray-400">DNS records, WHOIS, reverse IP &amp; subdomains</p>
 								</div>
 								<div class="bg-cyber-elevated/50 border border-cyber-accent/10 rounded-lg p-3">
-									<div class="text-blue-400 text-xs font-bold uppercase mb-1">False Positive</div>
-									<p class="text-[11px] text-gray-400">Check if legitimate traffic is being blocked</p>
+									<div class="flex items-center gap-1.5 mb-1">
+										<svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+										<span class="text-gray-400 text-xs font-bold uppercase">Scan History</span>
+									</div>
+									<p class="text-[11px] text-gray-400">Save &amp; review past scan results locally</p>
 								</div>
 							</div>
 							
@@ -400,31 +430,6 @@
 								</div>
 							</div>
 
-							<!-- Understanding Results -->
-							<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl p-3">
-								<h4 class="text-sm font-bold text-cyber-accent uppercase tracking-wider mb-3 flex items-center gap-2">
-									<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-									Understanding Results
-								</h4>
-								<div class="grid grid-cols-2 gap-2 text-xs">
-									<div class="flex items-center gap-2">
-										<span class="w-3 h-3 rounded bg-cyber-success"></span>
-										<span class="text-gray-300"><strong class="text-white">403</strong> = WAF blocked (good)</span>
-									</div>
-									<div class="flex items-center gap-2">
-										<span class="w-3 h-3 rounded bg-cyber-danger"></span>
-										<span class="text-gray-300"><strong class="text-white">200</strong> = Payload passed (bad)</span>
-									</div>
-									<div class="flex items-center gap-2">
-										<span class="w-3 h-3 rounded bg-cyber-warning"></span>
-										<span class="text-gray-300"><strong class="text-white">4xx</strong> = Other client error</span>
-									</div>
-									<div class="flex items-center gap-2">
-										<span class="w-3 h-3 rounded bg-blue-500"></span>
-										<span class="text-gray-300"><strong class="text-white">3xx</strong> = Redirect</span>
-									</div>
-								</div>
-							</div>
 						</div>
 					</div>
 				</div>
@@ -871,5 +876,6 @@
 			<span class="mx-2 text-gray-600">|</span>
 			<span>Fork of <a href="https://github.com/SecH0us3/waf-checker" target="_blank" rel="noopener" class="text-cyber-accent hover:text-cyber-success transition-colors">SecH0us3/waf-checker</a></span>
 		</footer>
+	<div id="reconTooltip"></div>
 	</body>
 </html>

@@ -297,6 +297,15 @@ export default {
 		if (urlObj.pathname === '/api/batch/stop') {
 			return await handleBatchStop(request);
 		}
+		if (urlObj.pathname === '/api/security-headers') {
+			return await handleSecurityHeaders(request);
+		}
+		if (urlObj.pathname === '/api/dns-recon') {
+			return await handleDNSRecon(request);
+		}
+		if (urlObj.pathname === '/api/recon') {
+			return await handleFullRecon(request);
+		}
 		return new Response('Not found', { status: 404 });
 	},
 };
@@ -1491,4 +1500,1409 @@ async function testSingleUrlForBatch(url: string, config: any): Promise<any[]> {
 
 	console.log(`Batch test completed for ${url}: ${allResults.length} total results`);
 	return allResults;
+}
+
+// =============================================
+// Security Headers Audit
+// =============================================
+const SECURITY_HEADERS: Record<string, { description: string; severity: 'critical' | 'high' | 'medium' | 'low'; recommendation: string }> = {
+	'content-security-policy': {
+		description: 'Controls resources the browser is allowed to load. Prevents XSS and data injection attacks.',
+		severity: 'critical',
+		recommendation: "Add a Content-Security-Policy header (e.g., default-src 'self'; script-src 'self')",
+	},
+	'strict-transport-security': {
+		description: 'Forces HTTPS connections and prevents SSL stripping attacks.',
+		severity: 'critical',
+		recommendation: 'Add Strict-Transport-Security: max-age=31536000; includeSubDomains; preload',
+	},
+	'x-frame-options': {
+		description: 'Prevents clickjacking by controlling iframe embedding.',
+		severity: 'high',
+		recommendation: 'Add X-Frame-Options: DENY or SAMEORIGIN',
+	},
+	'x-content-type-options': {
+		description: 'Prevents MIME-type sniffing attacks.',
+		severity: 'medium',
+		recommendation: 'Add X-Content-Type-Options: nosniff',
+	},
+	'referrer-policy': {
+		description: 'Controls how much referrer information is shared with other sites.',
+		severity: 'medium',
+		recommendation: 'Add Referrer-Policy: strict-origin-when-cross-origin',
+	},
+	'permissions-policy': {
+		description: 'Controls which browser features can be used (camera, mic, geolocation, etc.).',
+		severity: 'medium',
+		recommendation: 'Add Permissions-Policy: camera=(), microphone=(), geolocation=()',
+	},
+	'x-xss-protection': {
+		description: 'Legacy XSS filter for older browsers. Modern CSP is preferred.',
+		severity: 'low',
+		recommendation: 'Add X-XSS-Protection: 1; mode=block (or rely on CSP)',
+	},
+	'cross-origin-opener-policy': {
+		description: 'Prevents cross-origin windows from interacting with your page.',
+		severity: 'medium',
+		recommendation: 'Add Cross-Origin-Opener-Policy: same-origin',
+	},
+	'cross-origin-resource-policy': {
+		description: 'Prevents other origins from reading your resources.',
+		severity: 'medium',
+		recommendation: 'Add Cross-Origin-Resource-Policy: same-origin',
+	},
+	'cross-origin-embedder-policy': {
+		description: 'Controls cross-origin resource loading for added isolation.',
+		severity: 'low',
+		recommendation: 'Add Cross-Origin-Embedder-Policy: require-corp',
+	},
+};
+
+const INFORMATION_DISCLOSURE_HEADERS = ['server', 'x-powered-by', 'x-aspnet-version', 'x-aspnetmvc-version', 'x-generator', 'x-drupal-cache', 'x-varnish'];
+
+async function handleSecurityHeaders(request: Request): Promise<Response> {
+	const urlObj = new URL(request.url);
+	const targetUrl = urlObj.searchParams.get('url');
+
+	if (!targetUrl) {
+		return new Response(JSON.stringify({ error: 'Missing url parameter' }), {
+			status: 400,
+			headers: { 'content-type': 'application/json; charset=UTF-8' },
+		});
+	}
+
+	try {
+		// Validate URL
+		let parsedUrl: URL;
+		try {
+			parsedUrl = new URL(targetUrl);
+			if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+				throw new Error('Invalid protocol');
+			}
+		} catch {
+			return new Response(JSON.stringify({ error: 'Invalid URL format' }), {
+				status: 400,
+				headers: { 'content-type': 'application/json; charset=UTF-8' },
+			});
+		}
+
+		const startTime = Date.now();
+		const resp = await fetch(targetUrl, {
+			method: 'GET',
+			redirect: 'follow',
+			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WAF-Checker/1.0)' },
+		});
+		const responseTime = Date.now() - startTime;
+
+		const present: Array<{ header: string; value: string; description: string; severity: string }> = [];
+		const missing: Array<{ header: string; description: string; severity: string; recommendation: string }> = [];
+		const informationDisclosure: Array<{ header: string; value: string }> = [];
+
+		// Check security headers
+		for (const [header, info] of Object.entries(SECURITY_HEADERS)) {
+			const value = resp.headers.get(header);
+			if (value) {
+				present.push({ header, value, description: info.description, severity: info.severity });
+			} else {
+				missing.push({ header, description: info.description, severity: info.severity, recommendation: info.recommendation });
+			}
+		}
+
+		// Check information disclosure
+		for (const header of INFORMATION_DISCLOSURE_HEADERS) {
+			const value = resp.headers.get(header);
+			if (value) {
+				informationDisclosure.push({ header, value });
+			}
+		}
+
+		// Calculate score
+		const totalHeaders = Object.keys(SECURITY_HEADERS).length;
+		const presentCount = present.length;
+		const criticalMissing = missing.filter(h => h.severity === 'critical').length;
+		const highMissing = missing.filter(h => h.severity === 'high').length;
+
+		let score = Math.round((presentCount / totalHeaders) * 100);
+		// Penalty for critical/high missing
+		score = Math.max(0, score - (criticalMissing * 15) - (highMissing * 8));
+		// Penalty for information disclosure
+		score = Math.max(0, score - (informationDisclosure.length * 3));
+
+		let grade: string;
+		if (score >= 90) grade = 'A+';
+		else if (score >= 80) grade = 'A';
+		else if (score >= 70) grade = 'B';
+		else if (score >= 55) grade = 'C';
+		else if (score >= 40) grade = 'D';
+		else grade = 'F';
+
+		return new Response(
+			JSON.stringify({
+				url: targetUrl,
+				status: resp.status,
+				responseTime,
+				score,
+				grade,
+				present,
+				missing,
+				informationDisclosure,
+				totalChecked: totalHeaders,
+				timestamp: new Date().toISOString(),
+			}),
+			{ headers: { 'content-type': 'application/json; charset=UTF-8' } },
+		);
+	} catch (error) {
+		return new Response(
+			JSON.stringify({ error: 'Security headers audit failed', message: error instanceof Error ? error.message : 'Unknown error' }),
+			{ status: 500, headers: { 'content-type': 'application/json; charset=UTF-8' } },
+		);
+	}
+}
+
+// =============================================
+// DNS Reconnaissance + WHOIS
+// =============================================
+const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA'];
+
+async function resolveDNS(hostname: string, type: string): Promise<any[]> {
+	try {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 3000);
+		const resp = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`, {
+			headers: { Accept: 'application/dns-json' },
+			signal: controller.signal,
+		});
+		clearTimeout(timeout);
+		if (!resp.ok) return [];
+		const data: any = await resp.json();
+		return data.Answer || [];
+	} catch {
+		return [];
+	}
+}
+
+function detectInfraFromRecords(records: Record<string, any[]>): Array<{ type: string; provider: string; evidence: string }> {
+	const detected: Array<{ type: string; provider: string; evidence: string }> = [];
+	const seen = new Set<string>();
+
+	const patterns: Array<{ pattern: RegExp; provider: string; type: string }> = [
+		{ pattern: /cloudflare/i, provider: 'Cloudflare', type: 'CDN/WAF' },
+		{ pattern: /akamai|edgekey|edgesuite/i, provider: 'Akamai', type: 'CDN/WAF' },
+		{ pattern: /fastly/i, provider: 'Fastly', type: 'CDN' },
+		{ pattern: /amazonaws|aws|cloudfront/i, provider: 'AWS', type: 'Cloud/CDN' },
+		{ pattern: /azure|microsoft/i, provider: 'Azure', type: 'Cloud' },
+		{ pattern: /google|ghs\.googlehosted/i, provider: 'Google Cloud', type: 'Cloud' },
+		{ pattern: /incapsula|imperva/i, provider: 'Imperva', type: 'WAF' },
+		{ pattern: /sucuri/i, provider: 'Sucuri', type: 'WAF' },
+		{ pattern: /stackpath|highwinds/i, provider: 'StackPath', type: 'CDN/WAF' },
+		{ pattern: /ovh/i, provider: 'OVH', type: 'Hosting' },
+		{ pattern: /hetzner/i, provider: 'Hetzner', type: 'Hosting' },
+		{ pattern: /digitalocean/i, provider: 'DigitalOcean', type: 'Cloud' },
+		{ pattern: /vercel/i, provider: 'Vercel', type: 'Platform' },
+		{ pattern: /netlify/i, provider: 'Netlify', type: 'Platform' },
+		{ pattern: /wpengine/i, provider: 'WP Engine', type: 'Hosting' },
+	];
+
+	for (const [type, answers] of Object.entries(records)) {
+		for (const answer of answers) {
+			const value = String(answer.data || '');
+			for (const p of patterns) {
+				if (p.pattern.test(value) && !seen.has(p.provider)) {
+					seen.add(p.provider);
+					detected.push({ type: p.type, provider: p.provider, evidence: `${type} record: ${value}` });
+				}
+			}
+		}
+	}
+
+	return detected;
+}
+
+// =============================================
+// Subdomain Discovery
+// =============================================
+const COMMON_SUBDOMAINS = [
+	'www', 'mail', 'ftp', 'webmail', 'smtp', 'pop', 'imap', 'blog', 'forum',
+	'shop', 'store', 'api', 'dev', 'staging', 'test', 'admin', 'portal',
+	'vpn', 'remote', 'cdn', 'media', 'static', 'assets', 'img', 'images',
+	'app', 'mobile', 'ns1', 'ns2', 'ns3', 'dns', 'dns1', 'dns2',
+	'mx', 'mx1', 'mx2', 'email', 'cloud', 'git', 'gitlab', 'github',
+	'jenkins', 'ci', 'cd', 'docker', 'k8s', 'registry', 'monitor',
+	'grafana', 'prometheus', 'kibana', 'elastic', 'status', 'health',
+	'docs', 'wiki', 'help', 'support', 'kb', 'intranet', 'internal',
+	'crm', 'erp', 'sso', 'auth', 'login', 'oauth', 'id', 'identity',
+	'db', 'database', 'mysql', 'postgres', 'redis', 'mongo', 'sql',
+	'backup', 'bak', 'old', 'new', 'beta', 'alpha', 'demo', 'sandbox',
+	'proxy', 'gateway', 'edge', 'lb', 'loadbalancer', 'cache',
+	'ws', 'websocket', 'socket', 'realtime', 'live', 'streaming',
+	'files', 'download', 'upload', 'storage', 's3',
+	'web', 'www2', 'www3', 'secure', 'ssl', 'pay', 'payment', 'checkout',
+	'cpanel', 'plesk', 'whm', 'panel', 'dashboard', 'manage',
+	'autodiscover', 'autoconfig', 'webdisk', 'calendar', 'contacts',
+];
+
+async function discoverSubdomainsCT(domain: string): Promise<string[]> {
+	try {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 8000);
+		const resp = await fetch(`https://crt.sh/?q=%25.${encodeURIComponent(domain)}&output=json`, {
+			signal: controller.signal,
+			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WAF-Checker/1.0)' },
+		});
+		clearTimeout(timeout);
+		if (!resp.ok) return [];
+		const data: any[] = await resp.json();
+		const subdomains = new Set<string>();
+		for (const entry of data) {
+			const name = String(entry.name_value || '').toLowerCase().trim();
+			// Split multi-line entries (crt.sh sometimes returns \n-separated names)
+			for (const n of name.split('\n')) {
+				const clean = n.trim().replace(/^\*\./, '');
+				if (clean && clean.endsWith(`.${domain}`) && clean !== domain && !clean.includes('*')) {
+					subdomains.add(clean);
+				}
+			}
+		}
+		return Array.from(subdomains);
+	} catch {
+		return [];
+	}
+}
+
+async function discoverSubdomainsBrute(domain: string): Promise<Array<{ subdomain: string; ip: string }>> {
+	const found: Array<{ subdomain: string; ip: string }> = [];
+	// Process in batches of 15 to avoid overwhelming DNS
+	const batchSize = 15;
+	for (let i = 0; i < COMMON_SUBDOMAINS.length; i += batchSize) {
+		const batch = COMMON_SUBDOMAINS.slice(i, i + batchSize);
+		const results = await Promise.allSettled(batch.map(async (sub) => {
+			const fqdn = `${sub}.${domain}`;
+			const records = await resolveDNS(fqdn, 'A');
+			if (records.length > 0) {
+				return { subdomain: fqdn, ip: records[0].data };
+			}
+			return null;
+		}));
+		for (const r of results) {
+			if (r.status === 'fulfilled' && r.value) found.push(r.value);
+		}
+	}
+	return found;
+}
+
+async function handleDNSRecon(request: Request): Promise<Response> {
+	const urlObj = new URL(request.url);
+	const targetUrl = urlObj.searchParams.get('url');
+
+	if (!targetUrl) {
+		return new Response(JSON.stringify({ error: 'Missing url parameter' }), {
+			status: 400,
+			headers: { 'content-type': 'application/json; charset=UTF-8' },
+		});
+	}
+
+	let hostname: string;
+	try {
+		hostname = new URL(targetUrl).hostname;
+	} catch {
+		return new Response(JSON.stringify({ error: 'Invalid URL' }), {
+			status: 400,
+			headers: { 'content-type': 'application/json; charset=UTF-8' },
+		});
+	}
+
+	// Extract the root domain (e.g. "sub.example.com" -> "example.com")
+	const domainParts = hostname.split('.');
+	const rootDomain = domainParts.length > 2 ? domainParts.slice(-2).join('.') : hostname;
+
+	try {
+		// Run DNS resolution, WHOIS, reverse DNS, subdomain discovery, and reverse IP in parallel
+		const [dnsSettled, whoisSettled, ptrSettled, ctSubsSettled, bruteSubsSettled, reverseIpSettled] = await Promise.allSettled([
+			// DNS records
+			(async () => {
+				const results = await Promise.allSettled(DNS_RECORD_TYPES.map(async (type) => {
+					const records = await resolveDNS(hostname, type);
+					return { type, records };
+				}));
+				const records: Record<string, any[]> = {};
+				for (const r of results) {
+					if (r.status === 'fulfilled' && r.value.records.length > 0) {
+						records[r.value.type] = r.value.records;
+					}
+				}
+				return records;
+			})(),
+			// WHOIS
+			(async () => {
+				const aRecords = await resolveDNS(hostname, 'A');
+				if (aRecords.length === 0) return null;
+				const ip = aRecords[0].data;
+				const whoisResp = await fetchWithTimeout(`https://ipwho.is/${ip}`, {}, 5000);
+				if (!whoisResp.ok) return null;
+				const raw: any = await whoisResp.json();
+				if (raw.success === false) return null;
+				return {
+					status: 'success',
+					query: raw.ip || ip,
+					country: raw.country || 'N/A',
+					countryCode: raw.country_code || '',
+					region: raw.region_code || '',
+					regionName: raw.region || '',
+					city: raw.city || '',
+					zip: raw.postal || '',
+					lat: raw.latitude || 0,
+					lon: raw.longitude || 0,
+					timezone: raw.timezone?.id || '',
+					isp: raw.connection?.isp || '',
+					org: raw.connection?.org || '',
+					as: raw.connection?.asn ? `AS${raw.connection.asn}` : '',
+					asname: raw.connection?.org || '',
+					reverse: '',
+				};
+			})(),
+			// Reverse DNS PTR
+			(async () => {
+				const aRecords = await resolveDNS(hostname, 'A');
+				if (aRecords.length === 0) return null;
+				return resolveReverseDNS(aRecords[0].data);
+			})(),
+			// Certificate Transparency subdomain discovery
+			discoverSubdomainsCT(rootDomain),
+			// DNS brute-force subdomain discovery
+			discoverSubdomainsBrute(rootDomain),
+			// Reverse IP lookup (other domains on same IP)
+			(async () => {
+				const aRecords = await resolveDNS(hostname, 'A');
+				if (aRecords.length === 0) return [];
+				return reverseIPLookup(aRecords[0].data);
+			})(),
+		]);
+
+		const dnsRecords = dnsSettled.status === 'fulfilled' ? dnsSettled.value : {};
+		const whoisData = whoisSettled.status === 'fulfilled' ? whoisSettled.value : null;
+		const reverseDns = ptrSettled.status === 'fulfilled' ? ptrSettled.value : null;
+		const reverseIpDomains = reverseIpSettled.status === 'fulfilled' ? reverseIpSettled.value : [];
+
+		// Merge subdomains from CT and brute-force
+		const ctSubdomains = ctSubsSettled.status === 'fulfilled' ? ctSubsSettled.value : [];
+		const bruteSubdomains = bruteSubsSettled.status === 'fulfilled' ? bruteSubsSettled.value : [];
+
+		// Build unified subdomain list with IPs
+		const subdomainMap = new Map<string, string>();
+		for (const brute of bruteSubdomains) {
+			subdomainMap.set(brute.subdomain, brute.ip);
+		}
+		for (const ctSub of ctSubdomains) {
+			if (!subdomainMap.has(ctSub)) subdomainMap.set(ctSub, '');
+		}
+		const subdomains = Array.from(subdomainMap.entries())
+			.map(([name, ip]) => ({ name, ip, source: bruteSubdomains.some(b => b.subdomain === name) ? (ctSubdomains.includes(name) ? 'DNS + CT' : 'DNS') : 'CT' }))
+			.sort((a, b) => a.name.localeCompare(b.name));
+
+		// Detect infrastructure from DNS records
+		const infrastructure = detectInfraFromRecords(dnsRecords);
+
+		// Extract IPs
+		const aRecords = dnsRecords['A'] || [];
+		const ipAddresses = aRecords.map((r: any) => r.data);
+		const aaaaRecords = dnsRecords['AAAA'] || [];
+		const ipv6Addresses = aaaaRecords.map((r: any) => r.data);
+
+		// Nameservers
+		const nsRecords = dnsRecords['NS'] || [];
+		const nameservers = nsRecords.map((r: any) => String(r.data).replace(/\.$/, ''));
+
+		// MX
+		const mxRecords = dnsRecords['MX'] || [];
+		const mailServers = mxRecords.map((r: any) => {
+			const parts = String(r.data).split(' ');
+			return { priority: parseInt(parts[0]) || 0, server: (parts[1] || '').replace(/\.$/, '') };
+		}).sort((a: any, b: any) => a.priority - b.priority);
+
+		// TXT
+		const txtRecords = dnsRecords['TXT'] || [];
+		const txtValues = txtRecords.map((r: any) => String(r.data).replace(/^"|"$/g, ''));
+
+		// Email security
+		const spfRecord = txtValues.find((t: string) => t.startsWith('v=spf1'));
+		const dmarcRecords = await resolveDNS(`_dmarc.${hostname}`, 'TXT');
+		const dmarcRecord = dmarcRecords.length > 0 ? String(dmarcRecords[0].data).replace(/^"|"$/g, '') : null;
+
+		// Add PTR to whois if available
+		if (whoisData && reverseDns) whoisData.reverse = reverseDns;
+
+		return new Response(
+			JSON.stringify({
+				hostname,
+				rootDomain,
+				ipAddresses,
+				ipv6Addresses,
+				reverseDns,
+				nameservers,
+				mailServers,
+				txtRecords: txtValues,
+				dnsRecords,
+				infrastructure,
+				whois: whoisData,
+				subdomains,
+				subdomainStats: {
+					total: subdomains.length,
+					fromCT: ctSubdomains.length,
+					fromDNS: bruteSubdomains.length,
+				},
+				reverseIpDomains,
+				emailSecurity: {
+					spf: spfRecord || null,
+					dmarc: dmarcRecord || null,
+					hasSPF: !!spfRecord,
+					hasDMARC: !!dmarcRecord,
+				},
+				timestamp: new Date().toISOString(),
+			}),
+			{ headers: { 'content-type': 'application/json; charset=UTF-8' } },
+		);
+	} catch (error) {
+		return new Response(
+			JSON.stringify({ error: 'DNS reconnaissance failed', message: error instanceof Error ? error.message : 'Unknown error' }),
+			{ status: 500, headers: { 'content-type': 'application/json; charset=UTF-8' } },
+		);
+	}
+}
+
+// =============================================
+// Full Reconnaissance
+// =============================================
+
+// Technology detection patterns from response headers and HTML
+const TECH_PATTERNS: Array<{ name: string; category: string; detect: (headers: Headers, html: string, url: string) => string | null }> = [
+	// CMS
+	{ name: 'WordPress', category: 'CMS', detect: (h, html) => {
+		if (html.includes('wp-content') || html.includes('wp-includes') || html.includes('wp-json')) return 'HTML patterns (wp-content/wp-includes)';
+		if (h.get('x-powered-by')?.toLowerCase().includes('wordpress')) return 'X-Powered-By header';
+		if (h.get('link')?.includes('wp-json')) return 'REST API link header';
+		return null;
+	}},
+	{ name: 'Drupal', category: 'CMS', detect: (h, html) => {
+		if (h.get('x-drupal-cache') || h.get('x-generator')?.toLowerCase().includes('drupal')) return 'Drupal headers';
+		if (html.includes('Drupal.settings') || html.includes('/sites/default/files')) return 'HTML patterns';
+		return null;
+	}},
+	{ name: 'Joomla', category: 'CMS', detect: (h, html) => {
+		if (html.includes('/media/jui/') || html.includes('Joomla!') || html.includes('/administrator/')) return 'HTML patterns';
+		if (h.get('x-content-encoded-by')?.includes('Joomla')) return 'X-Content-Encoded-By header';
+		return null;
+	}},
+	{ name: 'Shopify', category: 'CMS/E-commerce', detect: (h, html) => {
+		if (html.includes('cdn.shopify.com') || html.includes('Shopify.theme')) return 'HTML patterns';
+		if (h.get('x-shopid') || h.get('x-shardid')) return 'Shopify headers';
+		return null;
+	}},
+	{ name: 'Magento', category: 'CMS/E-commerce', detect: (h, html) => {
+		if (html.includes('Mage.Cookies') || html.includes('/skin/frontend/') || html.includes('magento')) return 'HTML patterns';
+		if (h.get('set-cookie')?.includes('frontend=')) return 'Magento cookie';
+		return null;
+	}},
+	{ name: 'PrestaShop', category: 'CMS/E-commerce', detect: (h, html) => {
+		if (html.includes('prestashop') || html.includes('/modules/ps_') || html.includes('PrestaShop')) return 'HTML patterns';
+		return null;
+	}},
+	{ name: 'Ghost', category: 'CMS', detect: (h, html) => {
+		if (html.includes('ghost-') || h.get('x-powered-by')?.includes('Ghost')) return 'Ghost patterns';
+		return null;
+	}},
+	{ name: 'Wix', category: 'Website Builder', detect: (h, html) => {
+		if (html.includes('wix.com') || html.includes('X-Wix-')) return 'HTML/header patterns';
+		return null;
+	}},
+	{ name: 'Squarespace', category: 'Website Builder', detect: (h, html) => {
+		if (html.includes('squarespace.com') || html.includes('Squarespace')) return 'HTML patterns';
+		return null;
+	}},
+	{ name: 'Webflow', category: 'Website Builder', detect: (h, html) => {
+		if (html.includes('webflow.com') || html.includes('wf-') || h.get('x-powered-by')?.includes('Webflow')) return 'Webflow patterns';
+		return null;
+	}},
+	// Frameworks
+	{ name: 'Next.js', category: 'Framework', detect: (h, html) => {
+		if (h.get('x-powered-by')?.includes('Next.js') || html.includes('__NEXT_DATA__') || html.includes('/_next/')) return 'Next.js patterns';
+		return null;
+	}},
+	{ name: 'Nuxt.js', category: 'Framework', detect: (h, html) => {
+		if (html.includes('__NUXT__') || html.includes('/_nuxt/')) return 'Nuxt patterns';
+		return null;
+	}},
+	{ name: 'React', category: 'Frontend', detect: (h, html) => {
+		if (html.includes('__REACT_') || html.includes('react-root') || html.includes('data-reactroot')) return 'React markers';
+		return null;
+	}},
+	{ name: 'Vue.js', category: 'Frontend', detect: (h, html) => {
+		if (html.includes('__vue__') || html.includes('data-v-') || html.includes('vue.')) return 'Vue.js markers';
+		return null;
+	}},
+	{ name: 'Angular', category: 'Frontend', detect: (h, html) => {
+		if (html.includes('ng-version') || html.includes('ng-app') || html.includes('angular')) return 'Angular markers';
+		return null;
+	}},
+	{ name: 'Laravel', category: 'Framework', detect: (h, html) => {
+		if (h.get('set-cookie')?.includes('laravel_session')) return 'Laravel session cookie';
+		if (html.includes('csrf-token') && html.includes('Laravel')) return 'HTML patterns';
+		return null;
+	}},
+	{ name: 'Django', category: 'Framework', detect: (h, html) => {
+		if (h.get('set-cookie')?.includes('csrftoken') && h.get('set-cookie')?.includes('sessionid')) return 'Django cookies';
+		return null;
+	}},
+	{ name: 'Ruby on Rails', category: 'Framework', detect: (h, html) => {
+		if (h.get('x-powered-by')?.includes('Phusion') || h.get('set-cookie')?.includes('_rails_')) return 'Rails patterns';
+		return null;
+	}},
+	{ name: 'Express.js', category: 'Framework', detect: (h) => {
+		if (h.get('x-powered-by')?.includes('Express')) return 'X-Powered-By: Express';
+		return null;
+	}},
+	{ name: 'ASP.NET', category: 'Framework', detect: (h, html) => {
+		if (h.get('x-aspnet-version') || h.get('x-powered-by')?.includes('ASP.NET')) return 'ASP.NET headers';
+		if (html.includes('__VIEWSTATE') || html.includes('__EVENTVALIDATION')) return 'ASP.NET HTML patterns';
+		return null;
+	}},
+	{ name: 'PHP', category: 'Language', detect: (h) => {
+		if (h.get('x-powered-by')?.toLowerCase().includes('php')) return `X-Powered-By: ${h.get('x-powered-by')}`;
+		if (h.get('set-cookie')?.includes('PHPSESSID')) return 'PHPSESSID cookie';
+		return null;
+	}},
+	// Servers
+	{ name: 'Nginx', category: 'Web Server', detect: (h) => {
+		const server = h.get('server') || '';
+		if (server.toLowerCase().includes('nginx')) return `Server: ${server}`;
+		return null;
+	}},
+	{ name: 'Apache', category: 'Web Server', detect: (h) => {
+		const server = h.get('server') || '';
+		if (server.toLowerCase().includes('apache')) return `Server: ${server}`;
+		return null;
+	}},
+	{ name: 'LiteSpeed', category: 'Web Server', detect: (h) => {
+		const server = h.get('server') || '';
+		if (server.toLowerCase().includes('litespeed')) return `Server: ${server}`;
+		return null;
+	}},
+	{ name: 'IIS', category: 'Web Server', detect: (h) => {
+		const server = h.get('server') || '';
+		if (server.toLowerCase().includes('iis') || server.toLowerCase().includes('microsoft')) return `Server: ${server}`;
+		return null;
+	}},
+	{ name: 'Caddy', category: 'Web Server', detect: (h) => {
+		const server = h.get('server') || '';
+		if (server.toLowerCase().includes('caddy')) return `Server: ${server}`;
+		return null;
+	}},
+	// CDN/Infra
+	{ name: 'Cloudflare', category: 'CDN/WAF', detect: (h) => {
+		if (h.get('cf-ray') || h.get('server')?.toLowerCase().includes('cloudflare')) return 'Cloudflare headers (cf-ray)';
+		return null;
+	}},
+	{ name: 'Akamai', category: 'CDN', detect: (h) => {
+		if (h.get('x-akamai-transformed') || h.get('server')?.toLowerCase().includes('akamai')) return 'Akamai headers';
+		return null;
+	}},
+	{ name: 'Fastly', category: 'CDN', detect: (h) => {
+		if (h.get('x-served-by')?.includes('cache-') || h.get('via')?.includes('varnish') && h.get('x-fastly-request-id')) return 'Fastly headers';
+		return null;
+	}},
+	{ name: 'Vercel', category: 'Platform', detect: (h) => {
+		if (h.get('x-vercel-id') || h.get('server')?.toLowerCase().includes('vercel')) return 'Vercel headers';
+		return null;
+	}},
+	{ name: 'Netlify', category: 'Platform', detect: (h) => {
+		if (h.get('x-nf-request-id') || h.get('server')?.toLowerCase().includes('netlify')) return 'Netlify headers';
+		return null;
+	}},
+	// Analytics
+	{ name: 'Google Analytics', category: 'Analytics', detect: (h, html) => {
+		if (html.includes('google-analytics.com') || html.includes('gtag(') || html.includes('googletagmanager.com') || html.includes('GA_TRACKING_ID')) return 'GA scripts';
+		return null;
+	}},
+	{ name: 'Matomo/Piwik', category: 'Analytics', detect: (h, html) => {
+		if (html.includes('matomo') || html.includes('piwik')) return 'Matomo/Piwik scripts';
+		return null;
+	}},
+	// Security
+	{ name: 'reCAPTCHA', category: 'Security', detect: (h, html) => {
+		if (html.includes('recaptcha') || html.includes('google.com/recaptcha')) return 'reCAPTCHA scripts';
+		return null;
+	}},
+	{ name: 'hCaptcha', category: 'Security', detect: (h, html) => {
+		if (html.includes('hcaptcha.com') || html.includes('h-captcha')) return 'hCaptcha scripts';
+		return null;
+	}},
+	{ name: 'Turnstile', category: 'Security', detect: (h, html) => {
+		if (html.includes('challenges.cloudflare.com/turnstile') || html.includes('cf-turnstile')) return 'Turnstile widget';
+		return null;
+	}},
+	// More CMS
+	{ name: 'TYPO3', category: 'CMS', detect: (h, html) => {
+		if (html.includes('typo3') || html.includes('TYPO3') || h.get('x-generator')?.includes('TYPO3')) return 'TYPO3 patterns';
+		return null;
+	}},
+	{ name: 'Hugo', category: 'CMS', detect: (h, html) => {
+		if (html.includes('Hugo') && html.includes('generator') || html.includes('/hugo')) return 'Hugo patterns';
+		return null;
+	}},
+	{ name: 'Gatsby', category: 'Framework', detect: (h, html) => {
+		if (html.includes('gatsby') || html.includes('___gatsby') || h.get('x-powered-by')?.includes('Gatsby')) return 'Gatsby patterns';
+		return null;
+	}},
+	{ name: 'Svelte/SvelteKit', category: 'Framework', detect: (h, html) => {
+		if (html.includes('__sveltekit') || html.includes('svelte') || h.get('x-sveltekit-page')) return 'SvelteKit patterns';
+		return null;
+	}},
+	{ name: 'Remix', category: 'Framework', detect: (h, html) => {
+		if (html.includes('__remix') || html.includes('remix-run')) return 'Remix patterns';
+		return null;
+	}},
+	{ name: 'Astro', category: 'Framework', detect: (h, html) => {
+		if (html.includes('astro-') || html.match(/data-astro-/)) return 'Astro patterns';
+		return null;
+	}},
+	// More servers / platforms
+	{ name: 'Envoy', category: 'Web Server', detect: (h) => {
+		const server = h.get('server') || '';
+		if (server.toLowerCase().includes('envoy')) return `Server: ${server}`;
+		return null;
+	}},
+	{ name: 'OpenResty', category: 'Web Server', detect: (h) => {
+		const server = h.get('server') || '';
+		if (server.toLowerCase().includes('openresty')) return `Server: ${server}`;
+		return null;
+	}},
+	{ name: 'AWS', category: 'Platform', detect: (h) => {
+		if (h.get('x-amz-request-id') || h.get('x-amzn-requestid') || h.get('server')?.includes('AmazonS3') || h.get('x-amz-cf-id')) return 'AWS headers';
+		return null;
+	}},
+	{ name: 'Google Cloud', category: 'Platform', detect: (h) => {
+		if (h.get('x-cloud-trace-context') || h.get('server')?.includes('Google') || h.get('via')?.includes('google')) return 'GCP headers';
+		return null;
+	}},
+	{ name: 'Azure', category: 'Platform', detect: (h) => {
+		if (h.get('x-azure-ref') || h.get('x-ms-request-id') || h.get('server')?.includes('Microsoft-Azure')) return 'Azure headers';
+		return null;
+	}},
+	// More analytics
+	{ name: 'Hotjar', category: 'Analytics', detect: (h, html) => {
+		if (html.includes('hotjar.com') || html.includes('_hjSettings')) return 'Hotjar scripts';
+		return null;
+	}},
+	{ name: 'Microsoft Clarity', category: 'Analytics', detect: (h, html) => {
+		if (html.includes('clarity.ms') || html.includes('clarity(')) return 'Clarity scripts';
+		return null;
+	}},
+	{ name: 'Plausible', category: 'Analytics', detect: (h, html) => {
+		if (html.includes('plausible.io')) return 'Plausible scripts';
+		return null;
+	}},
+	{ name: 'Umami', category: 'Analytics', detect: (h, html) => {
+		if (html.includes('umami.') || html.includes('data-website-id')) return 'Umami scripts';
+		return null;
+	}},
+	// Optimization & Performance
+	{ name: 'Varnish', category: 'Cache', detect: (h) => {
+		if (h.get('via')?.toLowerCase().includes('varnish') || h.get('x-varnish')) return 'Varnish headers';
+		return null;
+	}},
+	{ name: 'WP Rocket', category: 'Cache', detect: (h, html) => {
+		if (html.includes('wp-rocket') || html.includes('wprocket') || h.get('x-powered-by')?.includes('Starter')) return 'WP Rocket patterns';
+		return null;
+	}},
+	{ name: 'LiteSpeed Cache', category: 'Cache', detect: (h, html) => {
+		if (h.get('x-litespeed-cache') || html.includes('litespeed-cache')) return 'LiteSpeed Cache headers';
+		return null;
+	}},
+	{ name: 'WP Super Cache', category: 'Cache', detect: (h, html) => {
+		if (html.includes('wp-super-cache') || html.includes('supercache')) return 'WP Super Cache patterns';
+		return null;
+	}},
+	{ name: 'W3 Total Cache', category: 'Cache', detect: (h, html) => {
+		if (html.includes('w3-total-cache') || html.includes('W3 Total Cache')) return 'W3TC patterns';
+		return null;
+	}},
+	// E-commerce
+	{ name: 'WooCommerce', category: 'E-commerce', detect: (h, html) => {
+		if (html.includes('woocommerce') || html.includes('wc-') || html.includes('WooCommerce')) return 'WooCommerce patterns';
+		return null;
+	}},
+	// SEO
+	{ name: 'Yoast SEO', category: 'SEO', detect: (h, html) => {
+		if (html.includes('yoast') || html.includes('Yoast SEO')) return 'Yoast SEO comments/patterns';
+		return null;
+	}},
+	{ name: 'Rank Math', category: 'SEO', detect: (h, html) => {
+		if (html.includes('rank-math') || html.includes('Rank Math')) return 'Rank Math patterns';
+		return null;
+	}},
+	// Fonts
+	{ name: 'Google Fonts', category: 'Font', detect: (h, html) => {
+		if (html.includes('fonts.googleapis.com') || html.includes('fonts.gstatic.com')) return 'Google Fonts CDN';
+		return null;
+	}},
+	{ name: 'Adobe Fonts', category: 'Font', detect: (h, html) => {
+		if (html.includes('use.typekit.net') || html.includes('adobe') && html.includes('font')) return 'Adobe Fonts/Typekit';
+		return null;
+	}},
+	// Chat / Support
+	{ name: 'Intercom', category: 'Chat', detect: (h, html) => {
+		if (html.includes('intercom') || html.includes('Intercom')) return 'Intercom widget';
+		return null;
+	}},
+	{ name: 'Crisp', category: 'Chat', detect: (h, html) => {
+		if (html.includes('crisp.chat') || html.includes('$crisp')) return 'Crisp widget';
+		return null;
+	}},
+	{ name: 'Zendesk', category: 'Chat', detect: (h, html) => {
+		if (html.includes('zendesk') || html.includes('zdassets.com')) return 'Zendesk widget';
+		return null;
+	}},
+	{ name: 'Tawk.to', category: 'Chat', detect: (h, html) => {
+		if (html.includes('tawk.to') || html.includes('Tawk_API')) return 'Tawk.to widget';
+		return null;
+	}},
+	// Marketing
+	{ name: 'Facebook Pixel', category: 'Marketing', detect: (h, html) => {
+		if (html.includes('fbq(') || html.includes('facebook.com/tr') || html.includes('fbevents.js')) return 'FB Pixel scripts';
+		return null;
+	}},
+	{ name: 'Google Ads', category: 'Marketing', detect: (h, html) => {
+		if (html.includes('googleads') || html.includes('adsbygoogle') || html.includes('pagead2')) return 'Google Ads scripts';
+		return null;
+	}},
+];
+
+// =============================================
+// Reverse DNS (PTR) lookup
+// =============================================
+async function resolveReverseDNS(ip: string): Promise<string | null> {
+	try {
+		const parts = ip.split('.');
+		if (parts.length !== 4) return null;
+		const reversed = parts.reverse().join('.') + '.in-addr.arpa';
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 3000);
+		const resp = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(reversed)}&type=PTR`, {
+			headers: { Accept: 'application/dns-json' },
+			signal: controller.signal,
+		});
+		clearTimeout(timeout);
+		if (!resp.ok) return null;
+		const data: any = await resp.json();
+		if (data.Answer && data.Answer.length > 0) {
+			return String(data.Answer[0].data).replace(/\.$/, '');
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+// =============================================
+// Reverse IP Lookup (domains on same IP)
+// =============================================
+async function reverseIPLookup(ip: string): Promise<string[]> {
+	const allDomains = new Set<string>();
+
+	// Strategy 1: HackerTarget API (plain text, one domain per line)
+	try {
+		const resp = await fetchWithTimeout(
+			`https://api.hackertarget.com/reverseiplookup/?q=${encodeURIComponent(ip)}`,
+			{ headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } },
+			5000,
+		);
+		if (resp.ok) {
+			const text = await resp.text();
+			if (text && !text.includes('error') && !text.includes('API count exceeded') && !text.includes('No DNS A records')) {
+				for (const line of text.split('\n')) {
+					const d = line.trim().toLowerCase();
+					if (d && d.includes('.') && !d.includes(' ') && !d.includes('<')) {
+						allDomains.add(d);
+					}
+				}
+			}
+		}
+	} catch { /* ignore */ }
+
+	// Strategy 2: rapiddns.io HTML scraping (if strategy 1 returned nothing)
+	if (allDomains.size === 0) {
+		try {
+			const resp = await fetchWithTimeout(
+				`https://rapiddns.io/s/${encodeURIComponent(ip)}?full=1`,
+				{ headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } },
+				6000,
+			);
+			if (resp.ok) {
+				const html = await resp.text();
+				// Extract domains from table cells: <td>domain.com</td>
+				const tdRegex = /<td>([a-z0-9][\w.-]*\.[a-z]{2,})<\/td>/gi;
+				let match: RegExpExecArray | null;
+				while ((match = tdRegex.exec(html)) !== null) {
+					const d = match[1].toLowerCase();
+					if (d.includes('.') && !d.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+						allDomains.add(d);
+					}
+				}
+			}
+		} catch { /* ignore */ }
+	}
+
+	return [...allDomains];
+}
+
+// =============================================
+// CMS Deep Analysis (plugins, themes, versions)
+// =============================================
+function extractCMSDetails(html: string, headers: Headers) {
+	const result: {
+		cmsName: string | null;
+		plugins: Array<{ slug: string; name: string; version: string | null }>;
+		themes: Array<{ slug: string; name: string; version: string | null; active: boolean }>;
+	} = { cmsName: null, plugins: [], themes: [] };
+
+	// Known page builders / NOT CMS (should not be reported as the main CMS)
+	const PAGE_BUILDERS = ['elementor', 'divi', 'beaver builder', 'wpbakery', 'oxygen', 'bricks', 'brizy', 'thrive', 'seedprod', 'spectra'];
+
+	// Detect WordPress FIRST via HTML patterns (most reliable)
+	const isWP = html.includes('wp-content') || html.includes('wp-includes');
+	if (isWP) {
+		result.cmsName = 'WordPress';
+	}
+
+	// Parse generator for other CMS (only if not already detected as WP)
+	if (!result.cmsName) {
+		const genMatch = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']([^"']*)["']/i)
+			|| html.match(/<meta[^>]*content=["']([^"']*)["'][^>]*name=["']generator["']/i);
+		if (genMatch) {
+			const raw = genMatch[1].trim();
+			if (/^Drupal/i.test(raw)) { result.cmsName = 'Drupal'; }
+			else if (/^Joomla/i.test(raw)) { result.cmsName = 'Joomla'; }
+			else {
+				// Other generators (but skip page builders)
+				const genericVer = raw.match(/^([\w.\-/]+)/);
+				if (genericVer && !PAGE_BUILDERS.some(pb => genericVer[1].toLowerCase().includes(pb))) {
+					result.cmsName = genericVer[1];
+				}
+			}
+		}
+	}
+
+	// WordPress specific extraction
+	if (isWP) {
+
+		// Extract plugins: /wp-content/plugins/SLUG/
+		const pluginMap = new Map<string, string | null>();
+		const pluginRegex = /\/wp-content\/plugins\/([a-zA-Z0-9_-]+)\/?[^"']*?(?:\?ver=([\d.]+))?/g;
+		let m: RegExpExecArray | null;
+		while ((m = pluginRegex.exec(html)) !== null) {
+			const slug = m[1];
+			const ver = m[2] || null;
+			if (!pluginMap.has(slug) || (ver && !pluginMap.get(slug))) {
+				pluginMap.set(slug, ver);
+			}
+		}
+		// Also try ver= in same tag for plugins without inline ver
+		const pluginTagRegex = /\/wp-content\/plugins\/([a-zA-Z0-9_-]+)\/[^"']*["'][^>]*$/gm;
+		// Second pass: look for ver= following the plugin URL in the same tag
+		const tagRegex = /<(?:script|link)[^>]*\/wp-content\/plugins\/([a-zA-Z0-9_-]+)\/[^"']*(?:\?[^"']*ver=([\d.]+))?[^>]*>/gi;
+		while ((m = tagRegex.exec(html)) !== null) {
+			const slug = m[1];
+			const ver = m[2] || null;
+			if (!pluginMap.has(slug) || (ver && !pluginMap.get(slug))) {
+				pluginMap.set(slug, ver);
+			}
+		}
+		for (const [slug, ver] of pluginMap) {
+			const name = slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+			result.plugins.push({ slug, name, version: ver });
+		}
+		result.plugins.sort((a, b) => a.name.localeCompare(b.name));
+
+		// Extract themes: /wp-content/themes/SLUG/
+		const themeMap = new Map<string, string | null>();
+		const themeRegex = /\/wp-content\/themes\/([a-zA-Z0-9_-]+)\/?[^"']*?(?:\?ver=([\d.]+))?/g;
+		while ((m = themeRegex.exec(html)) !== null) {
+			const slug = m[1];
+			const ver = m[2] || null;
+			if (!themeMap.has(slug) || (ver && !themeMap.get(slug))) {
+				themeMap.set(slug, ver);
+			}
+		}
+		let isFirst = true;
+		for (const [slug, ver] of themeMap) {
+			const name = slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+			result.themes.push({ slug, name, version: ver, active: isFirst });
+			isFirst = false;
+		}
+	}
+
+	// Drupal modules
+	if (html.includes('/modules/') && (html.includes('drupal') || html.includes('Drupal'))) {
+		const drupalModRegex = /\/modules\/(?:contrib\/)?([a-zA-Z0-9_-]+)\/[^"']*?(?:\?[^"']*v=([\d.]+))?/g;
+		let m2: RegExpExecArray | null;
+		const modMap = new Map<string, string | null>();
+		while ((m2 = drupalModRegex.exec(html)) !== null) {
+			const slug = m2[1];
+			if (['system', 'core', 'node', 'user', 'field'].includes(slug)) continue;
+			if (!modMap.has(slug)) modMap.set(slug, m2[2] || null);
+		}
+		for (const [slug, ver] of modMap) {
+			const name = slug.replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+			result.plugins.push({ slug, name, version: ver });
+		}
+	}
+
+	return result;
+}
+
+// =============================================
+// Extract JS libraries with versions
+// =============================================
+function extractJSLibraries(html: string): Array<{ name: string; version: string | null; evidence: string }> {
+	const libs: Array<{ name: string; version: string | null; evidence: string }> = [];
+	const found = new Set<string>();
+
+	const patterns: Array<{ name: string; regex: RegExp; verGroup?: number }> = [
+		{ name: 'jQuery', regex: /jquery[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'jQuery Migrate', regex: /jquery-migrate[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'jQuery UI', regex: /jquery-ui[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'Bootstrap', regex: /bootstrap[.-]?([\d.]+)?(?:\.min)?\.(?:js|css)/i, verGroup: 1 },
+		{ name: 'Font Awesome', regex: /font-?awesome[/-]?([\d.]+)?/i, verGroup: 1 },
+		{ name: 'Lodash', regex: /lodash[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'Moment.js', regex: /moment[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'Axios', regex: /axios[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'GSAP', regex: /gsap[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'Swiper', regex: /swiper[/-]?([\d.]+)?(?:\.min)?\.(?:js|css)/i, verGroup: 1 },
+		{ name: 'Slick', regex: /slick[.-]?([\d.]+)?(?:\.min)?\.(?:js|css)/i, verGroup: 1 },
+		{ name: 'AOS', regex: /aos[.-]?([\d.]+)?(?:\.min)?\.(?:js|css)/i, verGroup: 1 },
+		{ name: 'Owl Carousel', regex: /owl[.-]?carousel[.-]?([\d.]+)?/i, verGroup: 1 },
+		{ name: 'Lightbox', regex: /lightbox[.-]?([\d.]+)?(?:\.min)?\.(?:js|css)/i, verGroup: 1 },
+		{ name: 'Select2', regex: /select2[.-]?([\d.]+)?(?:\.min)?\.(?:js|css)/i, verGroup: 1 },
+		{ name: 'DataTables', regex: /dataTables[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'Chart.js', regex: /chart[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'Three.js', regex: /three[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'D3.js', regex: /d3[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'TailwindCSS', regex: /tailwind[.-]?([\d.]+)?(?:\.min)?\.css/i, verGroup: 1 },
+		{ name: 'Alpine.js', regex: /alpine[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'htmx', regex: /htmx[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'Turbo', regex: /turbo[.-]?([\d.]+)?(?:\.min)?\.js/i, verGroup: 1 },
+		{ name: 'Elementor', regex: /elementor[/-]?([\d.]+)?/i, verGroup: 1 },
+	];
+
+	for (const pat of patterns) {
+		const match = html.match(pat.regex);
+		if (match) {
+			if (found.has(pat.name)) continue;
+			found.add(pat.name);
+			const ver = pat.verGroup && match[pat.verGroup] ? match[pat.verGroup] : null;
+			libs.push({ name: pat.name, version: ver, evidence: match[0].substring(0, 80) });
+		}
+	}
+
+	// Try to extract jQuery version from inline code
+	if (!found.has('jQuery')) {
+		const jqInline = html.match(/jquery[\/\s]+([\d.]+)/i);
+		if (jqInline) {
+			found.add('jQuery');
+			libs.push({ name: 'jQuery', version: jqInline[1], evidence: jqInline[0] });
+		}
+	}
+
+	return libs;
+}
+
+// =============================================
+// Extract Open Graph + social metadata
+// =============================================
+function extractOpenGraph(html: string): Record<string, string> {
+	const og: Record<string, string> = {};
+	const ogRegex = /<meta[^>]*(?:property|name)=["'](og:|twitter:)([^"']*)["'][^>]*content=["']([^"']*)["']/gi;
+	let m: RegExpExecArray | null;
+	while ((m = ogRegex.exec(html)) !== null) {
+		og[m[1] + m[2]] = m[3];
+	}
+	// Reverse attribute order
+	const ogRegex2 = /<meta[^>]*content=["']([^"']*)["'][^>]*(?:property|name)=["'](og:|twitter:)([^"']*)["']/gi;
+	while ((m = ogRegex2.exec(html)) !== null) {
+		if (!og[m[2] + m[3]]) og[m[2] + m[3]] = m[1];
+	}
+	return og;
+}
+
+// =============================================
+// Extract page metadata
+// =============================================
+function extractPageMeta(html: string): {
+	language: string | null; canonical: string | null; favicon: string | null;
+	feeds: Array<{ type: string; href: string }>; emails: string[];
+} {
+	const langMatch = html.match(/<html[^>]*\slang=["']([^"']*)["']/i);
+	const canonMatch = html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']*)["']/i)
+		|| html.match(/<link[^>]*href=["']([^"']*)["'][^>]*rel=["']canonical["']/i);
+	const faviconMatch = html.match(/<link[^>]*rel=["'](?:shortcut )?icon["'][^>]*href=["']([^"']*)["']/i)
+		|| html.match(/<link[^>]*href=["']([^"']*)["'][^>]*rel=["'](?:shortcut )?icon["']/i);
+
+	const feeds: Array<{ type: string; href: string }> = [];
+	const feedRegex = /<link[^>]*rel=["']alternate["'][^>]*type=["'](application\/(?:rss|atom)\+xml)["'][^>]*href=["']([^"']*)["']/gi;
+	let m: RegExpExecArray | null;
+	while ((m = feedRegex.exec(html)) !== null) {
+		feeds.push({ type: m[1].includes('atom') ? 'Atom' : 'RSS', href: m[2] });
+	}
+
+	// Extract emails (simple regex, deduplicate)
+	const emailSet = new Set<string>();
+	const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+	while ((m = emailRegex.exec(html)) !== null) {
+		const email = m[0].toLowerCase();
+		if (!email.includes('example.') && !email.includes('wixpress') && !email.includes('schema.org') && !email.includes('sentry.')) {
+			emailSet.add(email);
+		}
+	}
+
+	return {
+		language: langMatch ? langMatch[1] : null,
+		canonical: canonMatch ? canonMatch[1] : null,
+		favicon: faviconMatch ? faviconMatch[1] : null,
+		feeds,
+		emails: Array.from(emailSet).slice(0, 20),
+	};
+}
+
+// Common paths to probe for technology fingerprinting
+const PROBE_PATHS = [
+	{ path: '/robots.txt', name: 'robots.txt' },
+	{ path: '/sitemap.xml', name: 'sitemap.xml' },
+	{ path: '/wp-login.php', name: 'WordPress Login' },
+	{ path: '/wp-json/', name: 'WordPress REST API' },
+	{ path: '/administrator/', name: 'Joomla Admin' },
+	{ path: '/user/login', name: 'Drupal Login' },
+	{ path: '/.well-known/security.txt', name: 'security.txt' },
+	{ path: '/favicon.ico', name: 'Favicon' },
+];
+
+// Fetch with timeout helper
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 8000): Promise<Response> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		const resp = await fetch(url, { ...options, signal: controller.signal });
+		return resp;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+async function handleFullRecon(request: Request): Promise<Response> {
+	const urlObj = new URL(request.url);
+	const targetUrl = urlObj.searchParams.get('url');
+
+	if (!targetUrl) {
+		return new Response(JSON.stringify({ error: 'Missing url parameter' }), {
+			status: 400, headers: { 'content-type': 'application/json; charset=UTF-8' },
+		});
+	}
+
+	let parsedTarget: URL;
+	try {
+		parsedTarget = new URL(targetUrl);
+		if (parsedTarget.protocol !== 'http:' && parsedTarget.protocol !== 'https:') throw new Error('Invalid protocol');
+	} catch {
+		return new Response(JSON.stringify({ error: 'Invalid URL' }), {
+			status: 400, headers: { 'content-type': 'application/json; charset=UTF-8' },
+		});
+	}
+
+	const baseUrl = `${parsedTarget.protocol}//${parsedTarget.host}`;
+	const hostname = parsedTarget.hostname;
+
+	// Result containers with defaults (so partial results still work)
+	let mainResponseTime = 0;
+	let mainHtml = '';
+	let mainHeaders: Headers = new Headers();
+	let mainStatus = 0;
+	const responseHeaders: Record<string, string> = {};
+	const technologies: Array<{ name: string; category: string; evidence: string }> = [];
+	let pageInfo: any = { title: null, description: null, generator: null, generatorFull: null, statusCode: 0, contentType: '', contentLength: '0' };
+	let dnsRecords: Record<string, any[]> = {};
+	let ipAddresses: string[] = [];
+	let ipv6Addresses: string[] = [];
+	let nameservers: string[] = [];
+	let infrastructure: Array<{ type: string; provider: string; evidence: string }> = [];
+	let whoisData: any = null;
+	let reverseDns: string | null = null;
+	let probeResults: Array<{ path: string; name: string; status: number; exists: boolean; contentType?: string; snippet?: string }> = [];
+	const cookies: Array<{ name: string; flags: string[] }> = [];
+	let cmsDetails: any = { cmsName: null, plugins: [], themes: [] };
+	let jsLibraries: Array<{ name: string; version: string | null; evidence: string }> = [];
+	let openGraph: Record<string, string> = {};
+	let pageMeta: any = { language: null, canonical: null, favicon: null, feeds: [], emails: [] };
+	let sslCertificate: any = null;
+	let reverseIpDomains: string[] = [];
+
+	try {
+		// === ALL PHASES IN PARALLEL: Page fetch + DNS + WHOIS/PTR + Probes + SSL Cert + Reverse IP ===
+		const [pageResult, dnsResult, whoisPtrResult, probesResult, sslResult, reverseIpResult] = await Promise.allSettled([
+			// Phase 1: Main page fetch (5s timeout)
+			(async () => {
+				const startTime = Date.now();
+				const mainResp = await fetchWithTimeout(targetUrl, {
+					method: 'GET', redirect: 'follow',
+					headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+				}, 5000);
+				const rt = Date.now() - startTime;
+				const html = await mainResp.text();
+				const hdrs: Record<string, string> = {};
+				mainResp.headers.forEach((v, k) => { hdrs[k] = v; });
+				return { responseTime: rt, html, headers: mainResp.headers, rawHeaders: hdrs, status: mainResp.status };
+			})(),
+			// Phase 2: DNS (3s per record)
+			(async () => {
+				const dnsTypes = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT'];
+				const results = await Promise.allSettled(dnsTypes.map(async (type) => {
+					const records = await resolveDNS(hostname, type);
+					return { type, records };
+				}));
+				const records: Record<string, any[]> = {};
+				for (const r of results) {
+					if (r.status === 'fulfilled' && r.value.records.length > 0) {
+						records[r.value.type] = r.value.records;
+					}
+				}
+				return records;
+			})(),
+			// Phase 3: WHOIS + Reverse DNS PTR (3s each)
+			(async () => {
+				const aRecords = await resolveDNS(hostname, 'A');
+				if (aRecords.length === 0) return { whois: null, ptr: null };
+				const ip = aRecords[0].data;
+				const [whoisSettled, ptrSettled] = await Promise.allSettled([
+					(async () => {
+						const whoisResp = await fetchWithTimeout(`https://ipwho.is/${ip}`, {}, 3000);
+						if (!whoisResp.ok) return null;
+						const raw: any = await whoisResp.json();
+						if (raw.success === false) return null;
+						return {
+							ip: raw.ip || ip, country: raw.country || 'N/A', countryCode: raw.country_code || '',
+							region: raw.region || '', city: raw.city || '', isp: raw.connection?.isp || '',
+							org: raw.connection?.org || '', asn: raw.connection?.asn ? `AS${raw.connection.asn}` : '',
+							asnOrg: raw.connection?.org || '',
+						};
+					})(),
+					resolveReverseDNS(ip),
+				]);
+				return {
+					whois: whoisSettled.status === 'fulfilled' ? whoisSettled.value : null,
+					ptr: ptrSettled.status === 'fulfilled' ? ptrSettled.value : null,
+				};
+			})(),
+			// Phase 4: Probes (HEAD for most, GET only for text files, 3s timeout)
+			Promise.allSettled(PROBE_PATHS.map(async (probe) => {
+				const needsBody = probe.path === '/robots.txt' || probe.path === '/.well-known/security.txt';
+				try {
+					const probeResp = await fetchWithTimeout(`${baseUrl}${probe.path}`, {
+						method: needsBody ? 'GET' : 'HEAD', redirect: 'follow',
+						headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WAF-Checker/1.0)' },
+					}, 3000);
+					const exists = probeResp.status >= 200 && probeResp.status < 400;
+					let snippet: string | undefined;
+					if (exists && needsBody) {
+						const text = await probeResp.text();
+						snippet = text.substring(0, 500);
+					}
+					return { path: probe.path, name: probe.name, status: probeResp.status, exists, contentType: probeResp.headers.get('content-type') || undefined, snippet };
+				} catch {
+					return { path: probe.path, name: probe.name, status: 0, exists: false };
+				}
+			})),
+			// Phase 5: SSL certificate info via crt.sh (latest cert)
+			(async () => {
+				try {
+					const resp = await fetchWithTimeout(
+						`https://crt.sh/?q=${encodeURIComponent(hostname)}&output=json`,
+						{ headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } },
+						8000,
+					);
+					if (!resp.ok) return null;
+					const text = await resp.text();
+					if (!text || text.startsWith('<') || text.startsWith('<!')) return null; // HTML error page
+					const certs: any[] = JSON.parse(text);
+					if (!Array.isArray(certs) || certs.length === 0) return null;
+					// Prefer non-precert, non-expired entries; fallback to any
+					const now = Date.now();
+					const validCerts = certs.filter((c: any) => {
+						if (!c.not_after) return false;
+						return new Date(c.not_after).getTime() > now;
+					});
+					const pool = validCerts.length > 0 ? validCerts : certs;
+					const nonPrecerts = pool.filter((c: any) => c.name_value && !String(c.entry_type || '').includes('precert'));
+					const sorted = (nonPrecerts.length > 0 ? nonPrecerts : pool)
+						.sort((a: any, b: any) => new Date(b.not_before || 0).getTime() - new Date(a.not_before || 0).getTime());
+					const cert = sorted[0];
+					if (!cert) return null;
+					return {
+						issuer: cert.issuer_name || null,
+						subject: cert.common_name || cert.name_value?.split('\n')[0] || null,
+						notBefore: cert.not_before || null,
+						notAfter: cert.not_after || null,
+						serialNumber: cert.serial_number || null,
+						domains: [...new Set(
+							(cert.name_value || '').split('\n').map((d: string) => d.trim().toLowerCase()).filter((d: string) => d && d !== hostname.toLowerCase())
+						)].slice(0, 20),
+					};
+				} catch { return null; }
+			})(),
+			// Phase 6: Reverse IP lookup (other domains on same IP)
+			(async () => {
+				const aRecords = await resolveDNS(hostname, 'A');
+				if (aRecords.length === 0) return [];
+				return reverseIPLookup(aRecords[0].data);
+			})(),
+		]);
+
+		// === Collect page results & run sync analysis ===
+		if (pageResult.status === 'fulfilled') {
+			const pg = pageResult.value;
+			mainResponseTime = pg.responseTime;
+			mainHtml = pg.html;
+			mainHeaders = pg.headers;
+			mainStatus = pg.status;
+			Object.assign(responseHeaders, pg.rawHeaders);
+		}
+
+		if (mainHtml || mainStatus) {
+			for (const tech of TECH_PATTERNS) {
+				try {
+					const evidence = tech.detect(mainHeaders, mainHtml, targetUrl);
+					if (evidence) technologies.push({ name: tech.name, category: tech.category, evidence });
+				} catch {}
+			}
+
+			const titleMatch = mainHtml.match(/<title[^>]*>([^<]*)<\/title>/i);
+			const descMatch = mainHtml.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i)
+				|| mainHtml.match(/<meta[^>]*content=["']([^"']*)["'][^>]*name=["']description["']/i);
+			const generatorMatch = mainHtml.match(/<meta[^>]*name=["']generator["'][^>]*content=["']([^"']*)["']/i)
+				|| mainHtml.match(/<meta[^>]*content=["']([^"']*)["'][^>]*name=["']generator["']/i);
+
+			let generatorClean: string | null = null;
+			let generatorFull: string | null = null;
+			if (generatorMatch) {
+				generatorFull = generatorMatch[1].trim();
+				const cleanMatch = generatorFull.match(/^([\w.\-/]+(?:\s+[\d.]+)?)/);
+				generatorClean = cleanMatch ? cleanMatch[1] : generatorFull;
+			}
+
+			pageInfo = {
+				title: titleMatch ? titleMatch[1].trim() : null,
+				description: descMatch ? descMatch[1].trim() : null,
+				generator: generatorClean, generatorFull,
+				statusCode: mainStatus,
+				contentType: mainHeaders.get('content-type') || '',
+				contentLength: mainHeaders.get('content-length') || String(mainHtml.length),
+			};
+
+			cmsDetails = extractCMSDetails(mainHtml, mainHeaders);
+			jsLibraries = extractJSLibraries(mainHtml);
+			openGraph = extractOpenGraph(mainHtml);
+			pageMeta = extractPageMeta(mainHtml);
+
+			if (generatorClean) {
+				const existing = technologies.find(t => generatorClean!.toLowerCase().includes(t.name.toLowerCase()));
+				if (!existing) technologies.push({ name: generatorClean, category: 'Generator', evidence: `<meta name="generator">` });
+			}
+		}
+
+		// === Collect DNS results ===
+		if (dnsResult.status === 'fulfilled') {
+			dnsRecords = dnsResult.value;
+			ipAddresses = (dnsRecords['A'] || []).map((r: any) => r.data);
+			ipv6Addresses = (dnsRecords['AAAA'] || []).map((r: any) => r.data);
+			nameservers = (dnsRecords['NS'] || []).map((r: any) => String(r.data).replace(/\.$/, ''));
+			infrastructure = detectInfraFromRecords(dnsRecords);
+		}
+
+		// === Collect WHOIS + PTR ===
+		if (whoisPtrResult.status === 'fulfilled') {
+			whoisData = whoisPtrResult.value.whois;
+			reverseDns = whoisPtrResult.value.ptr;
+		}
+
+		// === Collect probe results ===
+		if (probesResult.status === 'fulfilled') {
+			for (const r of probesResult.value) {
+				if (r.status === 'fulfilled') probeResults.push(r.value);
+			}
+		}
+
+		// === Collect SSL certificate ===
+		if (sslResult.status === 'fulfilled') sslCertificate = sslResult.value;
+
+		// === Collect Reverse IP ===
+		if (reverseIpResult.status === 'fulfilled') reverseIpDomains = reverseIpResult.value;
+
+		// === PHASE 6: Security headers (from phase 1 data) ===
+		const securityHeadersList = ['content-security-policy', 'strict-transport-security', 'x-frame-options', 'x-content-type-options', 'referrer-policy', 'permissions-policy'];
+		const securityHeaders: Record<string, string | null> = {};
+		for (const h of securityHeadersList) securityHeaders[h] = mainHeaders.get(h);
+		const securityScore = Object.values(securityHeaders).filter(v => v !== null).length;
+
+		// === PHASE 7: SSL ===
+		const isHttps = parsedTarget.protocol === 'https:';
+		const hstsHeader = mainHeaders.get('strict-transport-security');
+
+		// === PHASE 8: Cookies ===
+		const setCookieHeaders = responseHeaders['set-cookie'];
+		if (setCookieHeaders) {
+			for (const cookieStr of setCookieHeaders.split(/,(?=\s*\w+=)/)) {
+				const parts = cookieStr.trim().split(';');
+				const nameValue = parts[0]?.split('=');
+				if (nameValue && nameValue[0]) {
+					const flags: string[] = [];
+					const cookieLower = cookieStr.toLowerCase();
+					if (cookieLower.includes('secure')) flags.push('Secure');
+					if (cookieLower.includes('httponly')) flags.push('HttpOnly');
+					if (cookieLower.includes('samesite')) {
+						const ssMatch = cookieLower.match(/samesite=(\w+)/);
+						flags.push(`SameSite=${ssMatch ? ssMatch[1] : '?'}`);
+					}
+					cookies.push({ name: nameValue[0].trim(), flags });
+				}
+			}
+		}
+
+		return new Response(
+			JSON.stringify({
+				url: targetUrl,
+				hostname,
+				responseTime: mainResponseTime,
+				pageInfo,
+				cmsDetails,
+				technologies,
+				jsLibraries,
+				openGraph,
+				pageMeta,
+				dns: { ipAddresses, ipv6Addresses, nameservers, records: dnsRecords },
+				reverseDns,
+				reverseIpDomains,
+				infrastructure,
+				whois: whoisData,
+				probes: probeResults,
+				securityHeaders,
+				securityHeadersScore: `${securityScore}/${securityHeadersList.length}`,
+				ssl: { isHttps, hsts: hstsHeader || null, certificate: sslCertificate },
+				cookies,
+				responseHeaders,
+				timestamp: new Date().toISOString(),
+			}),
+			{ headers: { 'content-type': 'application/json; charset=UTF-8' } },
+		);
+	} catch (error) {
+		return new Response(
+			JSON.stringify({ error: 'Full reconnaissance failed', message: error instanceof Error ? error.message : 'Unknown error' }),
+			{ status: 500, headers: { 'content-type': 'application/json; charset=UTF-8' } },
+		);
+	}
 }

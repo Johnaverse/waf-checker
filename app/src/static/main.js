@@ -5,6 +5,45 @@ function escapeHtml(str) {
 }
 
 // ===========================================
+// UNIFIED CYBER LOADER
+// ===========================================
+
+/**
+ * Generate a unified cyber loader HTML.
+ * @param {Object} opts
+ * @param {'sm'|'md'|'lg'} opts.size - Loader size (default 'md')
+ * @param {string} opts.color - Tailwind text color class (default 'text-cyber-accent')
+ * @param {string} opts.text - Main loading text
+ * @param {string} opts.subtext - Smaller secondary text
+ * @param {boolean} opts.inline - Inline mode (for buttons/small areas)
+ * @returns {string} HTML string
+ */
+function cyberLoader(opts = {}) {
+	const size = opts.size || 'md';
+	const color = opts.color || 'text-cyber-accent';
+	const text = opts.text || '';
+	const subtext = opts.subtext || '';
+	const inline = opts.inline || false;
+
+	const loader = `<div class="cyber-loader cyber-loader--${size} ${color}"><div class="cyber-loader__ring"></div><div class="cyber-loader__arc"></div><div class="cyber-loader__dot"></div></div>`;
+
+	if (inline) {
+		return `<span class="cyber-loader-inline ${color}">${loader}<span class="cyber-loader-text text-sm">${text}</span></span>`;
+	}
+
+	let html = `<div class="flex flex-col items-center justify-center gap-3">
+		${loader}`;
+	if (text) {
+		html += `<p class="cyber-loader-text text-sm ${color}">${text}</p>`;
+	}
+	if (subtext) {
+		html += `<p class="text-gray-600 text-xs">${subtext}</p>`;
+	}
+	html += `</div>`;
+	return html;
+}
+
+// ===========================================
 // URL NORMALIZATION
 // ===========================================
 
@@ -770,9 +809,8 @@ const PAYLOAD_MAX_AUTO_RETRIES = 3;
 async function loadPayloadCategories() {
 	const container = document.getElementById('categoryCheckboxes');
 	if (container) {
-		container.innerHTML = `<div class="text-center py-3" id="payloadLoadingIndicator">
-			<div class="spinner-border spinner-border-sm text-cyber-accent" role="status"></div>
-			<span class="text-sm text-gray-400">Loading payloads from GitHub...</span>
+		container.innerHTML = `<div class="py-4" id="payloadLoadingIndicator">
+			${cyberLoader({ size: 'sm', color: 'text-cyber-accent', text: 'Loading payloads from GitHub...', inline: true })}
 		</div>`;
 	}
 	try {
@@ -810,9 +848,8 @@ async function loadPayloadCategories() {
 			// Auto-retry with increasing delay
 			const delay = payloadLoadRetries * 2000;
 			if (container) {
-				container.innerHTML = `<div class="text-center py-3" id="payloadLoadingIndicator">
-					<div class="spinner-border spinner-border-sm text-cyber-warning" role="status"></div>
-					<span class="text-sm text-cyber-warning">Retry ${payloadLoadRetries}/${PAYLOAD_MAX_AUTO_RETRIES}...</span>
+				container.innerHTML = `<div class="py-4" id="payloadLoadingIndicator">
+					${cyberLoader({ size: 'sm', color: 'text-cyber-warning', text: `Retry ${payloadLoadRetries}/${PAYLOAD_MAX_AUTO_RETRIES}...`, inline: true })}
 				</div>`;
 			}
 			setTimeout(loadPayloadCategories, delay);
@@ -1333,6 +1370,9 @@ async function fetchResults() {
 		// Now render the final full report (replaces live table with summary + filters + table)
 		document.getElementById('results').innerHTML = renderReport(allResults, falsePositiveTest);
 		highlightCategoryCheckboxesByResults(allResults, falsePositiveTest);
+
+		// Save to scan history
+		saveScanToHistory(currentTestSession);
 
 		// Show export controls
 		showExportControls();
@@ -2130,6 +2170,11 @@ let currentTestSession = null;
 let currentBatchJob = null;
 let batchPollInterval = null;
 
+// Global variables for recon/audit data (for exports)
+let lastSecurityHeadersData = null;
+let lastDNSReconData = null;
+let lastFullReconData = null;
+
 // Enhanced reporting and analytics functions
 function showExportControls() {
 	const exportControls = document.getElementById('exportControls');
@@ -2917,7 +2962,7 @@ async function exportAnalyticsScreenshot(event) {
 			btn = event.target.closest('button');
 			if (btn) {
 				oldText = btn.innerHTML;
-				btn.innerHTML = `<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Exporting...`;
+				btn.innerHTML = cyberLoader({ size: 'sm', text: 'Exporting...', inline: true });
 				btn.disabled = true;
 			}
 		}
@@ -3304,6 +3349,390 @@ function generateFilename(baseUrl, extension) {
 		hostname = 'results';
 	}
 	return `waf-report_${hostname}_${timestamp}.${extension}`;
+}
+
+// =============================================
+// Export for Recon / Headers / DNS features
+// =============================================
+function _getReconData(type) {
+	if (type === 'headers') return lastSecurityHeadersData;
+	if (type === 'dns') return lastDNSReconData;
+	if (type === 'recon') return lastFullReconData;
+	return null;
+}
+
+function _getReconLabel(type) {
+	if (type === 'headers') return 'security-headers';
+	if (type === 'dns') return 'dns-whois';
+	if (type === 'recon') return 'full-recon';
+	return 'export';
+}
+
+function exportReconJSON(type) {
+	const data = _getReconData(type);
+	if (!data) { showAlert('No data to export. Run the scan first.', 'Warning', 'warning'); return; }
+	const label = _getReconLabel(type);
+	const hostname = data.hostname || data.url || 'unknown';
+	const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+	const exportData = { exportedAt: new Date().toISOString(), tool: 'WAF-CHECKER.COM', type: label, ...data };
+	const content = JSON.stringify(exportData, null, 2);
+	const hname = hostname.replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9.-]/g, '_');
+	downloadFile(content, `${label}_${hname}_${timestamp}.json`, 'application/json');
+}
+
+function exportReconHTML(type) {
+	const data = _getReconData(type);
+	if (!data) { showAlert('No data to export. Run the scan first.', 'Warning', 'warning'); return; }
+
+	const resultsDiv = document.getElementById('results');
+	if (!resultsDiv) return;
+
+	const label = _getReconLabel(type);
+	const titleMap = { headers: 'Security Headers Audit', dns: 'DNS / WHOIS Intelligence', recon: 'Full Reconnaissance' };
+	const title = titleMap[type] || label;
+	const hostname = data.hostname || data.url || 'unknown';
+	const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+	const hname = hostname.replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9.-]/g, '_');
+	const now = new Date();
+	const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+	const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+	// Clone results and clean up for export
+	const cloneDiv = resultsDiv.cloneNode(true);
+	// Remove export buttons from clone
+	cloneDiv.querySelectorAll('button').forEach(btn => {
+		const txt = btn.textContent || '';
+		if (txt.includes('JSON') || txt.includes('HTML') || btn.title === 'Screenshot') btn.remove();
+	});
+	// Open all <details> elements
+	cloneDiv.querySelectorAll('details').forEach(d => d.setAttribute('open', ''));
+	// Remove max-height constraints so all content is visible
+	cloneDiv.querySelectorAll('[class*="max-h-"]').forEach(el => {
+		el.style.maxHeight = 'none';
+		el.style.overflow = 'visible';
+	});
+	// Remove tooltip icons
+	cloneDiv.querySelectorAll('.recon-tip').forEach(el => el.remove());
+
+	// Collect all inline <style> blocks and the Tailwind CSS
+	let inlineStyles = '';
+	for (const el of document.querySelectorAll('style')) {
+		inlineStyles += el.textContent + '\n';
+	}
+	// Try to grab the Tailwind CSS (loaded via <link>)
+	let tailwindCSS = '';
+	for (const link of document.querySelectorAll('link[rel="stylesheet"]')) {
+		try {
+			const sheet = link.sheet;
+			if (sheet) {
+				const rules = Array.from(sheet.cssRules).map(r => r.cssText).join('\n');
+				tailwindCSS += rules + '\n';
+			}
+		} catch (e) {
+			// CORS — skip external sheets that can't be read
+		}
+	}
+
+	const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${escapeHtml(title)} — ${escapeHtml(hostname)} — WAF-CHECKER.COM</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+        /* Tailwind + App styles */
+        ${tailwindCSS}
+        ${inlineStyles}
+
+        /* Report overrides */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+            background: linear-gradient(135deg, #0a0e14 0%, #0f1629 50%, #0a0e14 100%);
+            color: #e5e7eb;
+            padding: 40px 20px;
+            line-height: 1.6;
+        }
+        .report-container { max-width: 1200px; margin: 0 auto; }
+        .report-header {
+            background: linear-gradient(135deg, #161b22 0%, #1c2128 100%);
+            border: 1px solid rgba(0, 217, 255, 0.3);
+            border-radius: 16px;
+            padding: 40px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .report-header h1 { font-size: 28px; font-weight: 700; color: #00d9ff; margin-bottom: 8px; }
+        .report-header .subtitle { font-size: 14px; color: #9ca3af; margin-bottom: 20px; }
+        .report-header-info {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px; margin-top: 25px; text-align: left;
+        }
+        .report-info-item {
+            background: rgba(0, 217, 255, 0.05); padding: 12px; border-radius: 8px;
+            border: 1px solid rgba(0, 217, 255, 0.2);
+        }
+        .report-info-label { font-size: 10px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .report-info-value { font-size: 13px; color: #ffffff; font-weight: 500; font-family: 'JetBrains Mono', monospace; word-break: break-all; }
+        .report-footer {
+            margin-top: 40px; padding-top: 20px;
+            border-top: 1px solid rgba(0, 217, 255, 0.15);
+            text-align: center; font-size: 12px; color: #6b7280;
+        }
+        /* Ensure all content visible in report */
+        [class*="max-h-"] { max-height: none !important; overflow: visible !important; }
+        details[open] summary ~ * { display: block; }
+        details { border-radius: 12px; overflow: visible; margin-bottom: 16px; }
+        .cyber-loader, .cyber-loader-inline, .recon-tip { display: none !important; }
+        a { color: #00d9ff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        img { max-width: 100%; height: auto; }
+        code { font-family: 'JetBrains Mono', monospace; }
+    </style>
+</head>
+<body>
+    <div class="report-container">
+        <div class="report-header">
+            <h1>${escapeHtml(title)}</h1>
+            <div class="subtitle">WAF-CHECKER.COM &mdash; Security Assessment Report</div>
+            <div class="report-header-info">
+                <div class="report-info-item">
+                    <div class="report-info-label">Target</div>
+                    <div class="report-info-value">${escapeHtml(hostname)}</div>
+                </div>
+                <div class="report-info-item">
+                    <div class="report-info-label">Date</div>
+                    <div class="report-info-value">${dateStr}</div>
+                </div>
+                <div class="report-info-item">
+                    <div class="report-info-label">Time</div>
+                    <div class="report-info-value">${timeStr}</div>
+                </div>
+                ${data.responseTime ? `<div class="report-info-item"><div class="report-info-label">Response Time</div><div class="report-info-value">${data.responseTime}ms</div></div>` : ''}
+                ${data.grade ? `<div class="report-info-item"><div class="report-info-label">Security Grade</div><div class="report-info-value" style="font-size:24px;font-weight:700;color:${data.score >= 80 ? '#00ff9d' : data.score >= 50 ? '#ffb347' : '#ff3860'}">${data.grade}</div></div>` : ''}
+            </div>
+        </div>
+        <div style="margin-top:30px;">
+            ${cloneDiv.innerHTML}
+        </div>
+        <div class="report-footer">WAF-CHECKER.COM by Mickael Asseline &mdash; ${dateStr} at ${timeStr}</div>
+    </div>
+</body>
+</html>`;
+	downloadFile(html, `${label}_${hname}_${timestamp}.html`, 'text/html');
+	showAlert('HTML report downloaded successfully.', 'Export', 'success');
+}
+
+async function exportReconScreenshot(event) {
+	const content = document.getElementById('results');
+	if (!content || !content.innerHTML.trim()) {
+		showAlert('No results to capture.', 'Warning', 'warning');
+		return;
+	}
+
+	let btn = null;
+	let oldText = '';
+
+	try {
+		// Show loading state on button
+		if (event && event.target) {
+			btn = event.target.closest('button');
+			if (btn) {
+				oldText = btn.innerHTML;
+				btn.innerHTML = cyberLoader({ size: 'sm', text: 'Capturing...', inline: true });
+				btn.disabled = true;
+			}
+		}
+
+		// Ensure html2canvas is loaded
+		if (typeof html2canvas === 'undefined') {
+			const script = document.createElement('script');
+			script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+			document.head.appendChild(script);
+			await new Promise((resolve, reject) => { script.onload = resolve; script.onerror = reject; });
+		}
+
+		await new Promise(resolve => setTimeout(resolve, 300));
+
+		// Clone content first and prepare it
+		const clone = content.cloneNode(true);
+
+		// Remove export buttons from clone
+		clone.querySelectorAll('button').forEach(b => {
+			const txt = b.textContent || '';
+			if (txt.includes('JSON') || txt.includes('HTML') || b.title === 'Screenshot') b.remove();
+		});
+
+		// Expand all scrollable containers (max-h-*) so nothing is clipped
+		clone.querySelectorAll('[class*="max-h-"]').forEach(el => {
+			el.style.maxHeight = 'none';
+			el.style.overflow = 'visible';
+		});
+
+		// Open all <details> elements
+		clone.querySelectorAll('details').forEach(d => d.setAttribute('open', ''));
+
+		// Remove overflow-hidden that clips content
+		clone.querySelectorAll('.overflow-hidden').forEach(el => {
+			el.style.overflow = 'visible';
+		});
+
+		// Remove tooltip icons (not useful in screenshot)
+		clone.querySelectorAll('.recon-tip').forEach(el => el.remove());
+
+		// Create a temporary measuring container to find the real needed width
+		const measurer = document.createElement('div');
+		measurer.style.cssText = `
+			position: fixed; left: 0; top: 0; visibility: hidden; z-index: -9999;
+			width: auto; min-width: 1200px; max-width: none;
+			padding: 40px;
+			font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+		`;
+		measurer.appendChild(clone.cloneNode(true));
+		document.body.appendChild(measurer);
+		await new Promise(r => setTimeout(r, 200));
+		const measuredWidth = Math.max(measurer.scrollWidth, 1200);
+		document.body.removeChild(measurer);
+
+		// Create wrapper with the correct measured width
+		const wrapper = document.createElement('div');
+		wrapper.style.cssText = `
+			background: linear-gradient(135deg, #0a0e1a 0%, #0f1629 50%, #0a0e1a 100%);
+			padding: 40px;
+			width: ${measuredWidth + 80}px;
+			position: fixed;
+			left: 0;
+			top: 0;
+			visibility: hidden;
+			font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+			z-index: -9999;
+		`;
+
+		// Add header
+		const header = document.createElement('div');
+		const now = new Date();
+		const dateStr = now.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
+		const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+		header.innerHTML = `
+			<div style="display: flex; align-items: center; gap: 15px; margin-bottom: 25px; padding-bottom: 20px; border-bottom: 2px solid rgba(0, 255, 255, 0.3);">
+				<div style="width: 50px; height: 50px; background: rgba(0, 255, 255, 0.2); border-radius: 12px; display: flex; align-items: center; justify-content: center;">
+					<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#00ffff" stroke-width="2">
+						<path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+					</svg>
+				</div>
+				<div>
+					<div style="font-size: 22px; font-weight: bold; color: white; font-family: system-ui, -apple-system, sans-serif; margin-bottom: 4px;">WAF-CHECKER.COM</div>
+					<div style="font-size: 13px; color: #9ca3af; font-family: system-ui, -apple-system, sans-serif;">Generated by WAF-CHECKER.COM &bull; ${dateStr} at ${timeStr}</div>
+				</div>
+			</div>
+		`;
+		wrapper.appendChild(header);
+
+		// Set clone width
+		clone.style.cssText = `max-width: 100%; width: ${measuredWidth}px; margin: 0 auto;`;
+		wrapper.appendChild(clone);
+
+		// Footer
+		const footer = document.createElement('div');
+		footer.innerHTML = `
+			<div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid rgba(0, 255, 255, 0.2); text-align: center;">
+				<span style="font-size: 12px; color: #6b7280; font-family: system-ui, -apple-system, sans-serif;">WAF-CHECKER.COM by Mickael Asseline</span>
+			</div>
+		`;
+		wrapper.appendChild(footer);
+
+		document.body.appendChild(wrapper);
+
+		// Wait for layout to settle and images to load
+		await new Promise(resolve => setTimeout(resolve, 800));
+
+		// Make wrapper visible for capture
+		wrapper.style.visibility = 'visible';
+		wrapper.style.position = 'fixed';
+		wrapper.style.left = '0';
+		wrapper.style.top = '0';
+
+		// Force reflow
+		const height = wrapper.offsetHeight;
+		const width = wrapper.offsetWidth;
+
+		// Capture the wrapper
+		const canvas = await html2canvas(wrapper, {
+			backgroundColor: '#0a0e1a',
+			scale: 2,
+			useCORS: true,
+			logging: false,
+			allowTaint: true,
+			width: width,
+			height: height,
+			foreignObjectRendering: false,
+			onclone: (clonedDoc) => {
+				const clonedWrapper = clonedDoc.body.querySelector('div');
+				if (clonedWrapper) {
+					clonedWrapper.style.position = 'relative';
+					clonedWrapper.style.left = '0';
+					clonedWrapper.style.top = '0';
+					clonedWrapper.style.visibility = 'visible';
+				}
+				// Ensure all scrollable areas are expanded in the html2canvas clone too
+				clonedDoc.querySelectorAll('[class*="max-h-"]').forEach(el => {
+					el.style.maxHeight = 'none';
+					el.style.overflow = 'visible';
+				});
+				clonedDoc.querySelectorAll('.overflow-hidden').forEach(el => {
+					el.style.overflow = 'visible';
+				});
+				clonedDoc.querySelectorAll('details').forEach(d => d.setAttribute('open', ''));
+			}
+		});
+
+		document.body.removeChild(wrapper);
+
+		// Convert to blob and download + clipboard
+		canvas.toBlob(async (blob) => {
+			if (!blob) {
+				throw new Error('Failed to create blob from canvas');
+			}
+
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
+			const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+			let hname = 'scan';
+			try { hname = new URL(document.getElementById('url')?.value || '').hostname.replace(/[^a-zA-Z0-9.-]/g, '_'); } catch {}
+			link.download = `waf-scan_${hname}_${ts}.png`;
+			document.body.appendChild(link);
+			link.click();
+			document.body.removeChild(link);
+			URL.revokeObjectURL(url);
+
+			// Try clipboard copy
+			let clipboardSuccess = false;
+			try {
+				if (typeof ClipboardItem !== 'undefined' && navigator.clipboard && navigator.clipboard.write) {
+					const clipboardItem = new ClipboardItem({ 'image/png': Promise.resolve(blob) });
+					await navigator.clipboard.write([clipboardItem]);
+					clipboardSuccess = true;
+				}
+			} catch (clipErr) {
+				console.warn('Clipboard copy failed:', clipErr);
+			}
+
+			if (btn) { btn.innerHTML = oldText; btn.disabled = false; }
+
+			if (clipboardSuccess) {
+				showAlert('Screenshot exported and copied to clipboard!', 'Export', 'success');
+			} else {
+				showAlert('Screenshot exported successfully!', 'Export', 'success');
+			}
+		}, 'image/png');
+
+	} catch (error) {
+		console.error('Screenshot export failed:', error);
+		showAlert(`Failed to export screenshot: ${error.message}`, 'Error', 'error');
+		if (btn) { btn.innerHTML = oldText; btn.disabled = false; }
+	}
 }
 
 // Batch Testing Functions
@@ -3925,7 +4354,7 @@ async function showTestConfigModal() {
 	// Show loading state
 	const categoryList = document.getElementById('configCategoryList');
 	if (categoryList) {
-		categoryList.innerHTML = '<div class="text-center py-4 text-gray-500 text-sm">Loading payloads...</div>';
+		categoryList.innerHTML = `<div class="py-6">${cyberLoader({ size: 'md', color: 'text-gray-400', text: 'Loading payloads...' })}</div>`;
 	}
 	
 	// Load default payloads from server
@@ -4556,3 +4985,1096 @@ renderCategoryCheckboxes = function() {
 	initCustomPayloads();
 	updateCategoryCheckboxesWithCustom();
 };
+
+// =============================================
+// FEATURE: Security Headers Audit
+// =============================================
+async function runSecurityHeaders() {
+	const urlInput = document.getElementById('url');
+	const url = normalizeUrl(urlInput.value);
+	if (!url) { showAlert('Please enter a target URL first.', 'Missing URL', 'warning'); return; }
+	if (url !== urlInput.value) urlInput.value = url;
+
+	const resultsDiv = document.getElementById('results');
+	resultsDiv.innerHTML = `<div class="flex items-center justify-center h-full py-16">
+		${cyberLoader({ size: 'lg', color: 'text-cyber-accent', text: `Running Security Headers Audit...`, subtext: escapeHtml(url) })}
+	</div>`;
+
+	try {
+		const resp = await fetch(`/api/security-headers?url=${encodeURIComponent(url)}`);
+		const data = await resp.json();
+		if (!resp.ok) throw new Error(data.message || data.error || `HTTP ${resp.status}`);
+		displaySecurityHeadersResults(data);
+	} catch (e) {
+		resultsDiv.innerHTML = `<div class="text-center py-10"><p class="text-cyber-danger font-bold">Security Headers Audit Failed</p><p class="text-gray-400 text-sm mt-2">${escapeHtml(e.message)}</p></div>`;
+	}
+}
+
+function displaySecurityHeadersResults(data) {
+	lastSecurityHeadersData = data;
+	const resultsDiv = document.getElementById('results');
+	const gradeColors = {
+		'A+': 'text-cyber-success', 'A': 'text-cyber-success', 'B': 'text-yellow-400',
+		'C': 'text-orange-400', 'D': 'text-cyber-danger', 'F': 'text-red-500'
+	};
+	const gradeColor = gradeColors[data.grade] || 'text-gray-400';
+	const severityColors = { critical: 'text-red-400 bg-red-500/10 border-red-500/30', high: 'text-orange-400 bg-orange-500/10 border-orange-500/30', medium: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30', low: 'text-gray-400 bg-gray-500/10 border-gray-500/30' };
+	const severityIcons = { critical: '🔴', high: '🟠', medium: '🟡', low: '⚪' };
+
+	let html = `<div class="p-4">
+		<!-- Header -->
+		<div class="flex items-center justify-between mb-4 p-4 bg-purple-500/10 border border-purple-500/30 rounded-xl">
+			<div class="flex items-center gap-3">
+				<div class="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+					<svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+					</svg>
+				</div>
+				<div>
+					<h3 class="text-sm font-bold text-purple-400">Security Headers Audit</h3>
+					<p class="text-xs text-gray-400">${escapeHtml(data.url)} &mdash; ${data.responseTime}ms</p>
+				</div>
+			</div>
+			<div class="flex items-center gap-3">
+				<div class="flex items-center gap-1">
+					<button onclick="exportReconJSON('headers')" class="text-[10px] bg-cyber-elevated border border-purple-500/30 text-purple-400 px-2 py-0.5 rounded hover:bg-purple-500/20 transition-all font-medium" title="Export JSON">JSON</button>
+					<button onclick="exportReconHTML('headers')" class="text-[10px] bg-cyber-elevated border border-purple-500/30 text-purple-400 px-2 py-0.5 rounded hover:bg-purple-500/20 transition-all font-medium" title="Export HTML">HTML</button>
+					<button onclick="exportReconScreenshot(event)" class="text-[10px] bg-cyber-elevated border border-purple-500/30 text-purple-400 px-1.5 py-0.5 rounded hover:bg-purple-500/20 transition-all" title="Screenshot">
+						<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+					</button>
+				</div>
+				<div class="text-center">
+					<div class="text-3xl font-black ${gradeColor}">${data.grade}</div>
+					<div class="text-[10px] text-gray-500 uppercase">Score: ${data.score}/100</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Score bar -->
+		<div class="mb-4">
+			<div class="h-2 bg-cyber-elevated rounded-full overflow-hidden">
+				<div class="h-full rounded-full transition-all ${data.score >= 70 ? 'bg-cyber-success' : data.score >= 40 ? 'bg-yellow-500' : 'bg-cyber-danger'}" style="width: ${data.score}%"></div>
+			</div>
+		</div>
+
+		<!-- Summary cards -->
+		<div class="grid grid-cols-3 gap-3 mb-4">
+			<div class="bg-cyber-success/10 border border-cyber-success/30 rounded-xl p-3 text-center">
+				<div class="text-xl font-bold text-cyber-success">${data.present.length}</div>
+				<div class="text-[10px] text-gray-400 uppercase">Present</div>
+			</div>
+			<div class="bg-cyber-danger/10 border border-cyber-danger/30 rounded-xl p-3 text-center">
+				<div class="text-xl font-bold text-cyber-danger">${data.missing.length}</div>
+				<div class="text-[10px] text-gray-400 uppercase">Missing</div>
+			</div>
+			<div class="bg-orange-500/10 border border-orange-500/30 rounded-xl p-3 text-center">
+				<div class="text-xl font-bold text-orange-400">${data.informationDisclosure.length}</div>
+				<div class="text-[10px] text-gray-400 uppercase">Info Leak</div>
+			</div>
+		</div>`;
+
+	// Missing headers (most important)
+	if (data.missing.length > 0) {
+		html += `<div class="bg-cyber-card border border-cyber-danger/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-3 border-b border-cyber-danger/20 bg-cyber-danger/5">
+				<h4 class="text-sm font-bold text-cyber-danger uppercase tracking-wider">Missing Headers</h4>
+			</div>
+			<div class="divide-y divide-cyber-accent/10">`;
+		for (const h of data.missing) {
+			const sc = severityColors[h.severity] || severityColors.low;
+			html += `<div class="px-4 py-3">
+				<div class="flex items-center justify-between mb-1">
+					<code class="text-xs font-mono text-white font-bold">${escapeHtml(h.header)}</code>
+					<span class="text-[10px] px-2 py-0.5 rounded border ${sc} font-bold uppercase">${h.severity}</span>
+				</div>
+				<p class="text-[11px] text-gray-400 mb-1.5">${escapeHtml(h.description)}</p>
+				<p class="text-[10px] text-cyber-accent"><span class="font-bold">Fix:</span> ${escapeHtml(h.recommendation)}</p>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// Present headers
+	if (data.present.length > 0) {
+		html += `<div class="bg-cyber-card border border-cyber-success/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-3 border-b border-cyber-success/20 bg-cyber-success/5">
+				<h4 class="text-sm font-bold text-cyber-success uppercase tracking-wider">Present Headers</h4>
+			</div>
+			<div class="divide-y divide-cyber-accent/10">`;
+		for (const h of data.present) {
+			html += `<div class="px-4 py-3">
+				<div class="flex items-center justify-between mb-1">
+					<code class="text-xs font-mono text-white font-bold">${escapeHtml(h.header)}</code>
+					<span class="text-[10px] px-2 py-0.5 rounded bg-cyber-success/10 border border-cyber-success/30 text-cyber-success font-bold">OK</span>
+				</div>
+				<code class="text-[10px] text-gray-500 font-mono break-all">${escapeHtml(h.value)}</code>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// Information disclosure
+	if (data.informationDisclosure.length > 0) {
+		html += `<div class="bg-cyber-card border border-orange-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-3 border-b border-orange-500/20 bg-orange-500/5">
+				<h4 class="text-sm font-bold text-orange-400 uppercase tracking-wider">Information Disclosure</h4>
+			</div>
+			<div class="divide-y divide-cyber-accent/10">`;
+		for (const h of data.informationDisclosure) {
+			html += `<div class="px-4 py-3 flex items-center justify-between">
+				<code class="text-xs font-mono text-orange-400">${escapeHtml(h.header)}</code>
+				<code class="text-xs font-mono text-gray-400">${escapeHtml(h.value)}</code>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	html += `</div>`;
+	resultsDiv.innerHTML = html;
+}
+
+// =============================================
+// FEATURE: DNS Recon + WHOIS
+// =============================================
+async function runDNSRecon() {
+	const urlInput = document.getElementById('url');
+	const url = normalizeUrl(urlInput.value);
+	if (!url) { showAlert('Please enter a target URL first.', 'Missing URL', 'warning'); return; }
+	if (url !== urlInput.value) urlInput.value = url;
+
+	const resultsDiv = document.getElementById('results');
+	resultsDiv.innerHTML = `<div class="flex items-center justify-center h-full py-16">
+		${cyberLoader({ size: 'lg', color: 'text-cyan-400', text: 'Running DNS Reconnaissance...', subtext: escapeHtml(url) })}
+	</div>`;
+
+	try {
+		const resp = await fetch(`/api/dns-recon?url=${encodeURIComponent(url)}`);
+		const data = await resp.json();
+		if (!resp.ok) throw new Error(data.message || data.error || `HTTP ${resp.status}`);
+		displayDNSReconResults(data);
+	} catch (e) {
+		resultsDiv.innerHTML = `<div class="text-center py-10"><p class="text-cyber-danger font-bold">DNS Reconnaissance Failed</p><p class="text-gray-400 text-sm mt-2">${escapeHtml(e.message)}</p></div>`;
+	}
+}
+
+function displayDNSReconResults(data) {
+	lastDNSReconData = data;
+	const resultsDiv = document.getElementById('results');
+
+	let html = `<div class="p-4">
+		<!-- Header -->
+		<div class="flex items-center justify-between mb-4 p-4 bg-cyan-500/10 border border-cyan-500/30 rounded-xl">
+			<div class="flex items-center gap-3">
+				<div class="w-10 h-10 rounded-lg bg-cyan-500/20 flex items-center justify-center">
+					<svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+					</svg>
+				</div>
+				<div>
+					<h3 class="text-sm font-bold text-cyan-400">Target Intelligence</h3>
+					<p class="text-xs text-gray-400">DNS Reconnaissance & WHOIS — <span class="text-white font-mono">${escapeHtml(data.hostname)}</span></p>
+				</div>
+			</div>
+			<div class="flex items-center gap-1">
+				<button onclick="exportReconJSON('dns')" class="text-[10px] bg-cyber-elevated border border-cyan-500/30 text-cyan-400 px-2 py-0.5 rounded hover:bg-cyan-500/20 transition-all font-medium" title="Export JSON">JSON</button>
+				<button onclick="exportReconHTML('dns')" class="text-[10px] bg-cyber-elevated border border-cyan-500/30 text-cyan-400 px-2 py-0.5 rounded hover:bg-cyan-500/20 transition-all font-medium" title="Export HTML">HTML</button>
+				<button onclick="exportReconScreenshot(event)" class="text-[10px] bg-cyber-elevated border border-cyan-500/30 text-cyan-400 px-1.5 py-0.5 rounded hover:bg-cyan-500/20 transition-all" title="Screenshot">
+					<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+				</button>
+			</div>
+		</div>
+
+		<!-- IP Addresses -->
+		<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+			<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden">
+				<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30">
+					<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">IPv4 Addresses</h4>
+				</div>
+				<div class="p-3 space-y-1">
+					${data.ipAddresses.length > 0 ? data.ipAddresses.map(ip => `<code class="block text-sm font-mono text-white">${escapeHtml(ip)}</code>`).join('') : '<span class="text-xs text-gray-500">None found</span>'}
+				</div>
+			</div>
+			<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden">
+				<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30">
+					<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">IPv6 Addresses</h4>
+				</div>
+				<div class="p-3 space-y-1">
+					${data.ipv6Addresses.length > 0 ? data.ipv6Addresses.map(ip => `<code class="block text-xs font-mono text-white break-all">${escapeHtml(ip)}</code>`).join('') : '<span class="text-xs text-gray-500">None found</span>'}
+				</div>
+			</div>
+		</div>`;
+
+	// Infrastructure detection
+	if (data.infrastructure && data.infrastructure.length > 0) {
+		html += `<div class="bg-cyber-card border border-purple-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-purple-500/20 bg-purple-500/5">
+				<h4 class="text-xs font-bold text-purple-400 uppercase tracking-wider">Detected Infrastructure</h4>
+			</div>
+			<div class="p-3 space-y-2">`;
+		for (const infra of data.infrastructure) {
+			html += `<div class="flex items-center gap-3 px-3 py-2 bg-cyber-elevated/50 rounded-lg">
+				<span class="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">${escapeHtml(infra.type)}</span>
+				<span class="text-sm font-bold text-white">${escapeHtml(infra.provider)}</span>
+				<span class="text-[10px] text-gray-500 ml-auto">${escapeHtml(infra.evidence)}</span>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// WHOIS data
+	if (data.whois && data.whois.status === 'success') {
+		const w = data.whois;
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">IP WHOIS — ${escapeHtml(w.query)}</h4>
+			</div>
+			<div class="grid grid-cols-2 gap-px bg-cyber-accent/10">
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">ISP</span><span class="text-sm text-white">${escapeHtml(w.isp || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Organization</span><span class="text-sm text-white">${escapeHtml(w.org || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">AS Number</span><span class="text-sm text-white font-mono">${escapeHtml(w.as || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">AS Name</span><span class="text-sm text-white">${escapeHtml(w.asname || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Country</span><span class="text-sm text-white">${escapeHtml(w.country || 'N/A')} (${escapeHtml(w.countryCode || '')})</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">City</span><span class="text-sm text-white">${escapeHtml(w.city || 'N/A')}, ${escapeHtml(w.regionName || '')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Reverse DNS (PTR)</span><span class="text-xs font-mono break-all ${data.reverseDns ? 'text-cyan-400' : 'text-gray-600'}">${escapeHtml(data.reverseDns || w.reverse || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Timezone</span><span class="text-sm text-white">${escapeHtml(w.timezone || 'N/A')}</span></div>
+			</div>
+		</div>`;
+	}
+
+	// Nameservers
+	if (data.nameservers && data.nameservers.length > 0) {
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Nameservers</h4>
+			</div>
+			<div class="p-3 space-y-1">
+				${data.nameservers.map(ns => `<code class="block text-sm font-mono text-white">${escapeHtml(ns)}</code>`).join('')}
+			</div>
+		</div>`;
+	}
+
+	// Mail servers
+	if (data.mailServers && data.mailServers.length > 0) {
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Mail Servers (MX)</h4>
+			</div>
+			<div class="p-3 space-y-1">
+				${data.mailServers.map(mx => `<div class="flex items-center gap-3"><span class="text-[10px] text-gray-500 font-mono w-8">P:${mx.priority}</span><code class="text-sm font-mono text-white">${escapeHtml(mx.server)}</code></div>`).join('')}
+			</div>
+		</div>`;
+	}
+
+	// Email security
+	if (data.emailSecurity) {
+		const es = data.emailSecurity;
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Email Security</h4>
+			</div>
+			<div class="p-3 space-y-2">
+				<div class="flex items-center gap-2">
+					<span class="w-2 h-2 rounded-full ${es.hasSPF ? 'bg-cyber-success' : 'bg-cyber-danger'}"></span>
+					<span class="text-xs ${es.hasSPF ? 'text-cyber-success' : 'text-cyber-danger'} font-bold">SPF</span>
+					<code class="text-[10px] text-gray-500 font-mono ml-2 break-all">${es.spf ? escapeHtml(es.spf) : 'Not configured'}</code>
+				</div>
+				<div class="flex items-center gap-2">
+					<span class="w-2 h-2 rounded-full ${es.hasDMARC ? 'bg-cyber-success' : 'bg-cyber-danger'}"></span>
+					<span class="text-xs ${es.hasDMARC ? 'text-cyber-success' : 'text-cyber-danger'} font-bold">DMARC</span>
+					<code class="text-[10px] text-gray-500 font-mono ml-2 break-all">${es.dmarc ? escapeHtml(es.dmarc) : 'Not configured'}</code>
+				</div>
+			</div>
+		</div>`;
+	}
+
+	// TXT Records
+	if (data.txtRecords && data.txtRecords.length > 0) {
+		html += `<details open class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<summary class="px-4 py-2.5 bg-cyber-elevated/30 cursor-pointer text-xs font-bold text-gray-400 uppercase tracking-wider hover:text-white transition-colors">
+				TXT Records (${data.txtRecords.length})
+			</summary>
+			<div class="p-3 space-y-1 max-h-48 overflow-y-auto">
+				${data.txtRecords.map(txt => `<code class="block text-[10px] font-mono text-gray-400 break-all py-1 border-b border-cyber-accent/5">${escapeHtml(txt)}</code>`).join('')}
+			</div>
+		</details>`;
+	}
+
+	// Subdomains
+	if (data.subdomains && data.subdomains.length > 0) {
+		const stats = data.subdomainStats || {};
+		html += `<div class="bg-cyber-card border border-emerald-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-500/5 flex items-center justify-between">
+				<h4 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">Discovered Subdomains (${data.subdomains.length})</h4>
+				<div class="flex gap-2">
+					${stats.fromCT ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 font-bold">CT: ${stats.fromCT}</span>` : ''}
+					${stats.fromDNS ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-bold">DNS: ${stats.fromDNS}</span>` : ''}
+				</div>
+			</div>
+			<div class="max-h-80 overflow-y-auto divide-y divide-cyber-accent/10">`;
+		for (const sub of data.subdomains) {
+			const srcColor = sub.source === 'DNS + CT' ? 'text-purple-400 bg-purple-500/10 border-purple-500/30' :
+				sub.source === 'DNS' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' :
+				'text-blue-400 bg-blue-500/10 border-blue-500/30';
+			html += `<div class="flex items-center justify-between px-4 py-1.5 hover:bg-cyber-elevated/30 transition-colors">
+				<div class="flex items-center gap-2 min-w-0">
+					<span class="w-1.5 h-1.5 rounded-full ${sub.ip ? 'bg-emerald-400' : 'bg-gray-600'} flex-shrink-0"></span>
+					<code class="text-xs font-mono text-white whitespace-nowrap">${escapeHtml(sub.name)}</code>
+				</div>
+				<div class="flex items-center gap-2 flex-shrink-0 ml-2">
+					${sub.ip ? `<code class="text-[10px] font-mono text-gray-400 whitespace-nowrap">${escapeHtml(sub.ip)}</code>` : '<span class="text-[10px] text-gray-600 whitespace-nowrap">no A record</span>'}
+					<span class="text-[8px] px-1 py-0.5 rounded border ${srcColor} font-bold whitespace-nowrap">${escapeHtml(sub.source)}</span>
+				</div>
+			</div>`;
+		}
+		html += `</div></div>`;
+	} else if (data.subdomains) {
+		html += `<div class="bg-cyber-card border border-gray-500/20 rounded-xl p-4 mb-4 text-center">
+			<p class="text-gray-500 text-xs">No subdomains discovered via Certificate Transparency or DNS brute-force</p>
+		</div>`;
+	}
+
+	// Reverse IP (other domains on same IP) — at the end
+	if (data.reverseIpDomains && data.reverseIpDomains.length > 0) {
+		const domains = data.reverseIpDomains;
+		const targetHost = data.hostname?.toLowerCase() || '';
+		const otherDomains = domains.filter(d => d !== targetHost);
+		html += `<div class="bg-cyber-card border border-amber-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5 flex items-center justify-between">
+				<h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider">Reverse IP — Shared Hosting (${otherDomains.length} domain${otherDomains.length > 1 ? 's' : ''})</h4>
+				${data.ipAddresses?.[0] ? `<code class="text-[10px] font-mono text-gray-500">${escapeHtml(data.ipAddresses[0])}</code>` : ''}
+			</div>
+			<div class="max-h-64 overflow-y-auto divide-y divide-amber-500/10">`;
+		for (const domain of otherDomains) {
+			html += `<div class="flex items-center justify-between px-4 py-1.5 hover:bg-cyber-elevated/30 transition-colors">
+				<div class="flex items-center gap-2 min-w-0">
+					<span class="w-1.5 h-1.5 rounded-full bg-gray-600 flex-shrink-0"></span>
+					<code class="text-xs font-mono text-white whitespace-nowrap">${escapeHtml(domain)}</code>
+				</div>
+				<a href="https://${escapeHtml(domain)}" target="_blank" rel="noopener" class="text-[10px] text-gray-600 hover:text-cyan-400 transition-colors flex-shrink-0 ml-2">
+					<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+				</a>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	html += `</div>`;
+	resultsDiv.innerHTML = html;
+}
+
+// =============================================
+// FEATURE: Scan History (localStorage)
+// =============================================
+const SCAN_HISTORY_KEY = 'wafchecker_scan_history';
+const SCAN_HISTORY_MAX = 50;
+
+function saveScanToHistory(session) {
+	if (!session || !session.url || !session.results || session.results.length === 0) return;
+
+	const history = getScanHistory();
+	const totalTests = session.results.length;
+	const bypassed = session.results.filter(r => {
+		const s = parseInt(String(r.status), 10);
+		return s === 200 || s === 500;
+	}).length;
+	const bypassRate = totalTests > 0 ? Math.round((bypassed / totalTests) * 100) : 0;
+	const effectiveness = 100 - bypassRate;
+
+	// Response time stats
+	let totalTime = 0, minTime = Infinity, maxTime = 0;
+	for (const r of session.results) {
+		const rt = r.responseTime || 0;
+		totalTime += rt;
+		if (rt < minTime) minTime = rt;
+		if (rt > maxTime) maxTime = rt;
+	}
+	if (minTime === Infinity) minTime = 0;
+	const avgTime = totalTests > 0 ? Math.round(totalTime / totalTests) : 0;
+
+	const entry = {
+		id: `scan_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+		url: session.url,
+		timestamp: new Date().toISOString(),
+		totalTests,
+		bypassed,
+		bypassRate,
+		effectiveness,
+		avgResponseTime: avgTime,
+		minResponseTime: minTime,
+		maxResponseTime: maxTime,
+		categories: [...new Set(session.results.map(r => r.category))],
+		methods: [...new Set(session.results.map(r => r.method))],
+	};
+
+	history.unshift(entry);
+	// Keep only the latest N entries
+	if (history.length > SCAN_HISTORY_MAX) history.length = SCAN_HISTORY_MAX;
+
+	try {
+		localStorage.setItem(SCAN_HISTORY_KEY, JSON.stringify(history));
+	} catch (e) {
+		console.error('Failed to save scan history:', e);
+	}
+}
+
+function getScanHistory() {
+	try {
+		const stored = localStorage.getItem(SCAN_HISTORY_KEY);
+		return stored ? JSON.parse(stored) : [];
+	} catch {
+		return [];
+	}
+}
+
+function showScanHistory() {
+	const history = getScanHistory();
+	const resultsDiv = document.getElementById('results');
+
+	let html = `<div class="p-4">
+		<!-- Header -->
+		<div class="flex items-center justify-between mb-4 p-4 bg-gray-500/10 border border-gray-500/30 rounded-xl">
+			<div class="flex items-center gap-3">
+				<div class="w-10 h-10 rounded-lg bg-gray-500/20 flex items-center justify-center">
+					<svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+					</svg>
+				</div>
+				<div>
+					<h3 class="text-sm font-bold text-white">Scan History</h3>
+					<p class="text-xs text-gray-400">${history.length} scan${history.length !== 1 ? 's' : ''} recorded</p>
+				</div>
+			</div>
+			${history.length > 0 ? `<button onclick="clearScanHistory()" class="px-3 py-1.5 bg-cyber-danger/10 border border-cyber-danger/30 rounded-lg text-xs text-cyber-danger font-bold hover:bg-cyber-danger/20 transition-all">Clear All</button>` : ''}
+		</div>`;
+
+	if (history.length === 0) {
+		html += `<div class="text-center py-16">
+			<svg class="w-12 h-12 text-gray-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+			</svg>
+			<p class="text-gray-500 font-semibold">No scan history yet</p>
+			<p class="text-gray-600 text-sm mt-1">Run your first security test to see results here.</p>
+		</div>`;
+	} else {
+		html += `<div class="space-y-3">`;
+		for (const scan of history) {
+			const date = new Date(scan.timestamp);
+			const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+			const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+			const effColor = scan.effectiveness >= 75 ? 'text-cyber-success' : scan.effectiveness >= 50 ? 'text-yellow-400' : 'text-cyber-danger';
+			const riskLevel = scan.bypassRate > 75 ? 'Critical' : scan.bypassRate > 50 ? 'High' : scan.bypassRate > 25 ? 'Medium' : 'Low';
+			const riskColors = { Critical: 'text-red-400 bg-red-500/10 border-red-500/30', High: 'text-orange-400 bg-orange-500/10 border-orange-500/30', Medium: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30', Low: 'text-cyber-success bg-cyber-success/10 border-cyber-success/30' };
+
+			html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl p-4 hover:border-cyber-accent/40 transition-all">
+				<div class="flex items-center justify-between mb-3">
+					<div>
+						<div class="text-sm font-bold text-white font-mono">${escapeHtml(scan.url)}</div>
+						<div class="text-[10px] text-gray-500">${dateStr} at ${timeStr}</div>
+					</div>
+					<span class="px-2 py-0.5 text-[10px] font-bold uppercase rounded border ${riskColors[riskLevel]}">${riskLevel}</span>
+				</div>
+				<div class="grid grid-cols-5 gap-2">
+					<div class="text-center">
+						<div class="text-sm font-bold ${effColor} font-mono">${scan.effectiveness}%</div>
+						<div class="text-[9px] text-gray-500 uppercase">WAF Eff.</div>
+					</div>
+					<div class="text-center">
+						<div class="text-sm font-bold text-white font-mono">${scan.totalTests}</div>
+						<div class="text-[9px] text-gray-500 uppercase">Tests</div>
+					</div>
+					<div class="text-center">
+						<div class="text-sm font-bold ${scan.bypassed > 0 ? 'text-cyber-danger' : 'text-cyber-success'} font-mono">${scan.bypassed}</div>
+						<div class="text-[9px] text-gray-500 uppercase">Bypassed</div>
+					</div>
+					<div class="text-center">
+						<div class="text-sm font-bold text-cyan-400 font-mono">${scan.avgResponseTime}ms</div>
+						<div class="text-[9px] text-gray-500 uppercase">Avg Time</div>
+					</div>
+					<div class="text-center">
+						<div class="text-sm font-bold text-gray-400 font-mono">${scan.categories.length}</div>
+						<div class="text-[9px] text-gray-500 uppercase">Categories</div>
+					</div>
+				</div>
+			</div>`;
+		}
+		html += `</div>`;
+	}
+
+	html += `</div>`;
+	resultsDiv.innerHTML = html;
+}
+
+async function clearScanHistory() {
+	const confirmed = await showConfirm('Clear all scan history? This cannot be undone.', 'Clear History', 'danger');
+	if (!confirmed) return;
+	localStorage.removeItem(SCAN_HISTORY_KEY);
+	showScanHistory();
+}
+
+// =============================================
+// Recon tooltip helper (global fixed tooltip)
+// =============================================
+function reconTip(tip) {
+	return `<span class="recon-tip ml-1" data-tip="${tip.replace(/"/g, '&quot;')}" onmouseenter="showReconTip(this)" onmouseleave="hideReconTip()"><svg class="w-3.5 h-3.5 text-gray-600 hover:text-cyan-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-width="2" stroke-linecap="round" d="M12 16v-4m0-4h.01"/></svg></span>`;
+}
+function showReconTip(el) {
+	const tt = document.getElementById('reconTooltip');
+	if (!tt) return;
+	tt.textContent = el.getAttribute('data-tip');
+	const r = el.getBoundingClientRect();
+	tt.style.left = Math.min(r.left + r.width / 2 - 140, window.innerWidth - 290) + 'px';
+	tt.style.left = Math.max(8, parseFloat(tt.style.left)) + 'px';
+	tt.style.top = (r.bottom + 8) + 'px';
+	tt.classList.add('visible');
+}
+function hideReconTip() {
+	const tt = document.getElementById('reconTooltip');
+	if (tt) tt.classList.remove('visible');
+}
+
+// =============================================
+// FEATURE: Full Reconnaissance
+// =============================================
+async function runFullRecon() {
+	const urlInput = document.getElementById('url');
+	const url = normalizeUrl(urlInput.value);
+	if (!url) { showAlert('Please enter a target URL first.', 'Missing URL', 'warning'); return; }
+	if (url !== urlInput.value) urlInput.value = url;
+
+	const resultsDiv = document.getElementById('results');
+	resultsDiv.innerHTML = `<div class="flex items-center justify-center h-full py-16">
+		${cyberLoader({ size: 'lg', color: 'text-emerald-400', text: 'Running Full Reconnaissance...', subtext: 'Scanning technologies, DNS, WHOIS, probes... (max ~15s)' })}
+	</div>`;
+
+	try {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 15000);
+		const resp = await fetch(`/api/recon?url=${encodeURIComponent(url)}`, { signal: controller.signal });
+		clearTimeout(timeout);
+		const data = await resp.json();
+		if (!resp.ok) throw new Error(data.message || data.error || `HTTP ${resp.status}`);
+		displayFullReconResults(data);
+	} catch (e) {
+		const msg = e.name === 'AbortError' ? 'Request timed out after 15 seconds. The target site may be too slow or blocking requests.' : e.message;
+		resultsDiv.innerHTML = `<div class="text-center py-10"><p class="text-cyber-danger font-bold">Full Reconnaissance Failed</p><p class="text-gray-400 text-sm mt-2">${escapeHtml(msg)}</p><button onclick="runFullRecon()" class="mt-4 px-4 py-2 bg-emerald-500/20 border border-emerald-500/50 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-all text-sm">Retry</button></div>`;
+	}
+}
+
+function displayFullReconResults(data) {
+	lastFullReconData = data;
+	const resultsDiv = document.getElementById('results');
+	const catColors = {
+		'CMS': 'bg-pink-500/15 text-pink-400 border-pink-500/30',
+		'CMS/E-commerce': 'bg-pink-500/15 text-pink-400 border-pink-500/30',
+		'Framework': 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+		'Frontend': 'bg-violet-500/15 text-violet-400 border-violet-500/30',
+		'Language': 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
+		'Web Server': 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+		'CDN/WAF': 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+		'CDN': 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+		'Cache': 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+		'Platform': 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30',
+		'Analytics': 'bg-green-500/15 text-green-400 border-green-500/30',
+		'Security': 'bg-red-500/15 text-red-400 border-red-500/30',
+		'Generator': 'bg-gray-500/15 text-gray-400 border-gray-500/30',
+		'Website Builder': 'bg-teal-500/15 text-teal-400 border-teal-500/30',
+		'JS Library': 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+		'E-commerce': 'bg-pink-500/15 text-pink-400 border-pink-500/30',
+		'SEO': 'bg-lime-500/15 text-lime-400 border-lime-500/30',
+		'Font': 'bg-slate-500/15 text-slate-400 border-slate-500/30',
+		'Chat': 'bg-sky-500/15 text-sky-400 border-sky-500/30',
+		'Marketing': 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/30',
+	};
+
+	// CMS logos: use real logos from Simple Icons CDN
+	const cmsLogos = {
+		'WordPress': '<img src="https://cdn.simpleicons.org/wordpress/21759b" alt="WordPress" class="w-8 h-8">',
+		'Drupal': '<img src="https://cdn.simpleicons.org/drupal/0678be" alt="Drupal" class="w-8 h-8">',
+		'Joomla': '<img src="https://cdn.simpleicons.org/joomla/5091cd" alt="Joomla" class="w-8 h-8">',
+		'Shopify': '<img src="https://cdn.simpleicons.org/shopify/7ab55c" alt="Shopify" class="w-8 h-8">',
+		'Magento': '<img src="https://cdn.simpleicons.org/magento/ee672f" alt="Magento" class="w-8 h-8">',
+		'PrestaShop': '<img src="https://cdn.simpleicons.org/prestashop/df0067" alt="PrestaShop" class="w-8 h-8">',
+		'Ghost': '<img src="https://cdn.simpleicons.org/ghost/ffffff" alt="Ghost" class="w-8 h-8">',
+		'TYPO3': '<img src="https://cdn.simpleicons.org/typo3/ff8700" alt="TYPO3" class="w-8 h-8">',
+		'Wix': '<img src="https://cdn.simpleicons.org/wix/0c6efc" alt="Wix" class="w-8 h-8">',
+		'Squarespace': '<img src="https://cdn.simpleicons.org/squarespace/ffffff" alt="Squarespace" class="w-8 h-8">',
+		'Webflow': '<img src="https://cdn.simpleicons.org/webflow/4353ff" alt="Webflow" class="w-8 h-8">',
+		'Hugo': '<img src="https://cdn.simpleicons.org/hugo/ff4088" alt="Hugo" class="w-8 h-8">',
+		'Next.js': '<img src="https://cdn.simpleicons.org/nextdotjs/ffffff" alt="Next.js" class="w-8 h-8">',
+		'Gatsby': '<img src="https://cdn.simpleicons.org/gatsby/663399" alt="Gatsby" class="w-8 h-8">',
+		'Nuxt': '<img src="https://cdn.simpleicons.org/nuxtdotjs/00dc82" alt="Nuxt" class="w-8 h-8">',
+		'Laravel': '<img src="https://cdn.simpleicons.org/laravel/ff2d20" alt="Laravel" class="w-8 h-8">',
+		'Django': '<img src="https://cdn.simpleicons.org/django/092e20" alt="Django" class="w-8 h-8">',
+		'Craft CMS': '<img src="https://cdn.simpleicons.org/craftcms/e5422b" alt="Craft CMS" class="w-8 h-8">',
+		'Contentful': '<img src="https://cdn.simpleicons.org/contentful/2478cc" alt="Contentful" class="w-8 h-8">',
+		'Strapi': '<img src="https://cdn.simpleicons.org/strapi/4945ff" alt="Strapi" class="w-8 h-8">',
+	};
+
+	let html = `<div class="p-4">
+		<!-- Header -->
+		<div class="flex items-center justify-between mb-4 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl">
+			<div class="flex items-center gap-3">
+				<div class="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+					<svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+					</svg>
+				</div>
+				<div>
+					<h3 class="text-sm font-bold text-emerald-400">Full Reconnaissance</h3>
+					<p class="text-xs text-gray-400"><span class="font-mono text-white">${escapeHtml(data.hostname)}</span> &mdash; ${data.responseTime}ms</p>
+				</div>
+			</div>
+			<div class="flex items-center gap-1">
+				<button onclick="exportReconJSON('recon')" class="text-[10px] bg-cyber-elevated border border-emerald-500/30 text-emerald-400 px-2 py-0.5 rounded hover:bg-emerald-500/20 transition-all font-medium" title="Export JSON">JSON</button>
+				<button onclick="exportReconHTML('recon')" class="text-[10px] bg-cyber-elevated border border-emerald-500/30 text-emerald-400 px-2 py-0.5 rounded hover:bg-emerald-500/20 transition-all font-medium" title="Export HTML">HTML</button>
+				<button onclick="exportReconScreenshot(event)" class="text-[10px] bg-cyber-elevated border border-emerald-500/30 text-emerald-400 px-1.5 py-0.5 rounded hover:bg-emerald-500/20 transition-all" title="Screenshot">
+					<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+				</button>
+			</div>
+		</div>
+
+		<!-- Page Info -->
+		<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Page Information</h4>
+				${reconTip('Basic information extracted from the HTML page: title tag, meta description, HTTP status code, language and canonical URL.')}
+			</div>
+			<div class="grid grid-cols-2 gap-px bg-cyber-accent/10">
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Title</span><span class="text-sm text-white">${escapeHtml(data.pageInfo?.title || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Status</span><span class="text-sm text-white font-mono">${data.pageInfo?.statusCode || 'N/A'}</span></div>
+				<div class="bg-cyber-card p-3 col-span-2"><span class="text-[10px] text-gray-500 uppercase block">Description</span><span class="text-xs text-gray-300">${escapeHtml(data.pageInfo?.description || 'N/A')}</span></div>
+				${data.pageMeta?.language ? `<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Language</span><span class="text-sm text-white font-mono">${escapeHtml(data.pageMeta.language)}</span></div>` : ''}
+				${data.pageMeta?.canonical ? `<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Canonical</span><span class="text-xs text-gray-300 break-all">${escapeHtml(data.pageMeta.canonical)}</span></div>` : ''}
+			</div>
+		</div>`;
+
+	// Technologies
+	if (data.technologies && data.technologies.length > 0) {
+		html += `<div class="bg-cyber-card border border-emerald-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">Detected Technologies (${data.technologies.length})</h4>
+				${reconTip('Technologies identified from HTTP response headers (Server, X-Powered-By), HTML patterns, cookies, and known CDN/WAF signatures.')}
+			</div>
+			<div class="p-3 space-y-2">`;
+		for (const tech of data.technologies) {
+			const cc = catColors[tech.category] || 'bg-gray-500/15 text-gray-400 border-gray-500/30';
+			html += `<div class="flex items-center gap-3 px-3 py-2.5 bg-cyber-elevated/50 rounded-lg">
+				<span class="px-2 py-0.5 text-[9px] font-bold uppercase rounded border ${cc} whitespace-nowrap">${escapeHtml(tech.category)}</span>
+				<span class="text-sm font-bold text-white">${escapeHtml(tech.name)}</span>
+				<span class="text-[10px] text-gray-500 ml-auto hidden md:block">${escapeHtml(tech.evidence)}</span>
+			</div>`;
+		}
+		html += `</div></div>`;
+	} else {
+		html += `<div class="bg-cyber-card border border-gray-500/20 rounded-xl p-4 mb-4 text-center">
+			<p class="text-gray-500 text-sm">No specific technologies detected</p>
+		</div>`;
+	}
+
+	// JS Libraries
+	if (data.jsLibraries && data.jsLibraries.length > 0) {
+		html += `<div class="bg-cyber-card border border-amber-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider">JavaScript Libraries (${data.jsLibraries.length})</h4>
+				${reconTip('Frontend JavaScript libraries detected from script/CSS file names and paths. Versions are extracted from filenames when available (e.g. jquery-3.7.1.min.js).')}
+			</div>
+			<div class="p-3 space-y-1">`;
+		for (const lib of data.jsLibraries) {
+			html += `<div class="flex items-center gap-2 px-3 py-1.5 bg-cyber-elevated/50 rounded-lg">
+				<span class="text-xs font-bold text-white">${escapeHtml(lib.name)}</span>
+				${lib.version ? `<span class="text-[10px] font-mono text-amber-300/70">${escapeHtml(lib.version)}</span>` : ''}
+				<span class="text-[10px] text-gray-600 ml-auto hidden md:block font-mono">${escapeHtml(lib.evidence)}</span>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// CMS Details (version, plugins, themes) — after Technologies + JS Libraries
+	const cms = data.cmsDetails;
+	if (cms && (cms.cmsName || cms.plugins?.length > 0 || cms.themes?.length > 0)) {
+		html += `<div class="bg-cyber-card border border-pink-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-pink-500/20 bg-pink-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-pink-400 uppercase tracking-wider">CMS Details</h4>
+				${reconTip('Content Management System detected from HTML patterns, meta generator tag, and resource URLs. Plugins and themes are extracted from wp-content paths with versions from ?ver= parameters.')}
+			</div>
+			<div class="p-3 space-y-3">`;
+
+		// CMS Name + Logo + Version
+		if (cms.cmsName) {
+			const logo = cmsLogos[cms.cmsName] || `<div class="w-8 h-8 rounded-lg bg-pink-500/20 flex items-center justify-center text-pink-400 font-bold text-sm">${escapeHtml(cms.cmsName.charAt(0))}</div>`;
+			html += `<div class="flex items-center gap-4 px-4 py-3 bg-gradient-to-r from-pink-500/10 to-purple-500/10 border border-pink-500/20 rounded-xl">
+				<div class="flex-shrink-0">${logo}</div>
+				<div>
+					<div class="text-lg font-bold text-white">${escapeHtml(cms.cmsName)}</div>
+				</div>
+			</div>`;
+		}
+
+		// Generator detail (show page builder info etc.)
+		if (data.pageInfo?.generatorFull && data.pageInfo.generatorFull !== data.pageInfo.generator) {
+			html += `<div class="px-3 py-2 bg-cyber-elevated/30 rounded-lg">
+				<span class="text-[10px] text-gray-500 uppercase block mb-1">Page Builder / Generator</span>
+				<code class="text-[11px] text-gray-400 break-all">${escapeHtml(data.pageInfo.generatorFull)}</code>
+			</div>`;
+		}
+
+		// Themes
+		if (cms.themes && cms.themes.length > 0) {
+			html += `<div>
+				<div class="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1.5 px-1">Themes (${cms.themes.length})</div>
+				<div class="space-y-1">`;
+			for (const theme of cms.themes) {
+				html += `<div class="flex items-center gap-2 px-3 py-2 bg-cyber-elevated/50 rounded-lg">
+					<span class="w-2 h-2 rounded-full ${theme.active ? 'bg-pink-400' : 'bg-gray-600'}"></span>
+					<span class="text-sm text-white font-medium">${escapeHtml(theme.name)}</span>
+					${theme.version ? `<span class="text-[10px] font-mono text-pink-300/70">${escapeHtml(theme.version)}</span>` : ''}
+					${theme.active ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-pink-500/15 text-pink-400 border border-pink-500/30 font-bold ml-auto">ACTIVE</span>' : ''}
+					<span class="text-[10px] text-gray-600 ml-auto font-mono">${escapeHtml(theme.slug)}</span>
+				</div>`;
+			}
+			html += `</div></div>`;
+		}
+
+		// Plugins
+		if (cms.plugins && cms.plugins.length > 0) {
+			html += `<div>
+				<div class="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1.5 px-1">Plugins / Extensions (${cms.plugins.length})</div>
+				<div class="space-y-1">`;
+			for (const plugin of cms.plugins) {
+				html += `<div class="flex items-center gap-2 px-3 py-1.5 bg-cyber-elevated/50 rounded-lg">
+					<span class="w-1.5 h-1.5 rounded-full bg-purple-400/60"></span>
+					<span class="text-xs text-white">${escapeHtml(plugin.name)}</span>
+					${plugin.version ? `<span class="text-[10px] font-mono text-purple-300/70">${escapeHtml(plugin.version)}</span>` : ''}
+					<span class="text-[10px] text-gray-600 ml-auto font-mono">${escapeHtml(plugin.slug)}</span>
+				</div>`;
+			}
+			html += `</div></div>`;
+		}
+
+		html += `</div></div>`;
+	}
+
+	// IP + Nameservers
+	html += `<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+		<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">IP Addresses</h4>
+				${reconTip('IPv4/IPv6 addresses resolved via DNS A/AAAA records. Reverse DNS (PTR) shows the hostname associated with the IP by the hosting provider.')}
+			</div>
+			<div class="p-3 space-y-1">
+				${(data.dns?.ipAddresses || []).map(ip => `<code class="block text-sm font-mono text-white">${escapeHtml(ip)}</code>`).join('') || '<span class="text-xs text-gray-500">None</span>'}
+				${(data.dns?.ipv6Addresses || []).length > 0 ? data.dns.ipv6Addresses.map(ip => `<code class="block text-[10px] font-mono text-gray-400 break-all">${escapeHtml(ip)}</code>`).join('') : ''}
+			</div>
+		</div>
+		<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Nameservers</h4>
+				${reconTip('DNS nameservers (NS records) responsible for the domain. Can reveal the DNS provider (e.g. Cloudflare, AWS Route53, OVH).')}
+			</div>
+			<div class="p-3 space-y-1">
+				${(data.dns?.nameservers || []).map(ns => `<code class="block text-sm font-mono text-white">${escapeHtml(ns)}</code>`).join('') || '<span class="text-xs text-gray-500">None</span>'}
+			</div>
+		</div>
+	</div>`;
+
+	// Infrastructure
+	if (data.infrastructure && data.infrastructure.length > 0) {
+		html += `<div class="bg-cyber-card border border-purple-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-purple-500/20 bg-purple-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-purple-400 uppercase tracking-wider">Infrastructure</h4>
+				${reconTip('Hosting infrastructure detected from DNS records patterns: CDN providers (Cloudflare, AWS), email services (Google Workspace, Microsoft 365), and DNS providers.')}
+			</div>
+			<div class="p-3 space-y-2">`;
+		for (const infra of data.infrastructure) {
+			html += `<div class="flex items-center gap-3 px-3 py-2 bg-cyber-elevated/50 rounded-lg">
+				<span class="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">${escapeHtml(infra.type)}</span>
+				<span class="text-sm font-bold text-white">${escapeHtml(infra.provider)}</span>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// WHOIS
+	if (data.whois) {
+		const w = data.whois;
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">WHOIS — ${escapeHtml(w.ip || '')}</h4>
+				${reconTip('IP geolocation and ownership data. Shows the Internet Service Provider (ISP), organization, Autonomous System Number (ASN), and approximate physical location of the server.')}
+			</div>
+			<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-cyber-accent/10">
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">ISP</span><span class="text-xs text-white">${escapeHtml(w.isp || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Org</span><span class="text-xs text-white">${escapeHtml(w.org || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">ASN</span><span class="text-xs text-white font-mono">${escapeHtml(w.asn || 'N/A')}</span></div>
+				<div class="bg-cyber-card p-3"><span class="text-[10px] text-gray-500 uppercase block">Location</span><span class="text-xs text-white">${escapeHtml(w.city || '')}${w.city && w.country ? ', ' : ''}${escapeHtml(w.country || 'N/A')}</span></div>
+				${data.reverseDns ? `<div class="bg-cyber-card p-3 col-span-2 md:col-span-4"><span class="text-[10px] text-gray-500 uppercase flex items-center">Reverse DNS (PTR)${reconTip('PTR record maps an IP address back to a hostname. Reveals the server identity as configured by the hosting provider.')}</span><code class="text-xs font-mono text-cyan-400 mt-0.5 block">${escapeHtml(data.reverseDns)}</code></div>` : ''}
+			</div>
+		</div>`;
+	}
+
+	// Open Graph / Social metadata
+	const ogKeys = data.openGraph ? Object.keys(data.openGraph) : [];
+	if (ogKeys.length > 0) {
+		html += `<details open class="bg-cyber-card border border-blue-500/20 rounded-xl overflow-hidden mb-4">
+			<summary class="px-4 py-2.5 bg-blue-500/5 cursor-pointer text-xs font-bold text-blue-400 uppercase tracking-wider hover:text-blue-300 transition-colors flex items-center">
+				Open Graph / Social (${ogKeys.length})
+				${reconTip('Open Graph (og:) and Twitter Card metadata used for link previews on social media. Shows how the page appears when shared on Facebook, Twitter, LinkedIn, etc.')}
+			</summary>
+			<div class="divide-y divide-blue-500/10">`;
+		// Show og:image preview if available
+		const ogImage = data.openGraph['og:image'];
+		if (ogImage) {
+			html += `<div class="p-3 flex items-center gap-3">
+				<img src="${escapeHtml(ogImage)}" alt="OG Image" class="h-16 rounded border border-blue-500/20 object-cover" onerror="this.style.display='none'"/>
+				<div class="text-[10px] text-gray-500 break-all">${escapeHtml(ogImage)}</div>
+			</div>`;
+		}
+		for (const [key, value] of Object.entries(data.openGraph)) {
+			if (key === 'og:image') continue;
+			html += `<div class="flex gap-2 px-4 py-1.5 text-[11px]">
+				<span class="font-mono text-blue-400 font-bold whitespace-nowrap">${escapeHtml(key)}</span>
+				<span class="text-gray-400 break-all">${escapeHtml(String(value))}</span>
+			</div>`;
+		}
+		html += `</div></details>`;
+	}
+
+	// Feeds + Emails
+	const feeds = data.pageMeta?.feeds || [];
+	const emails = data.pageMeta?.emails || [];
+	if (feeds.length > 0 || emails.length > 0) {
+		html += `<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">`;
+		if (feeds.length > 0) {
+			html += `<div class="bg-cyber-card border border-orange-500/20 rounded-xl overflow-hidden">
+				<div class="px-4 py-2.5 border-b border-orange-500/20 bg-orange-500/5 flex items-center">
+					<h4 class="text-xs font-bold text-orange-400 uppercase tracking-wider">RSS / Atom Feeds (${feeds.length})</h4>
+					${reconTip('RSS and Atom feed URLs found in the HTML. These provide syndication endpoints for content aggregators and news readers.')}
+				</div>
+				<div class="p-3 space-y-1">`;
+			for (const feed of feeds) {
+				html += `<div class="flex items-center gap-2">
+					<span class="px-1.5 py-0.5 text-[9px] font-bold rounded bg-orange-500/15 text-orange-400 border border-orange-500/30">${escapeHtml(feed.type)}</span>
+					<code class="text-[10px] text-gray-400 break-all">${escapeHtml(feed.href)}</code>
+				</div>`;
+			}
+			html += `</div></div>`;
+		}
+		if (emails.length > 0) {
+			html += `<div class="bg-cyber-card border border-yellow-500/20 rounded-xl overflow-hidden">
+				<div class="px-4 py-2.5 border-b border-yellow-500/20 bg-yellow-500/5 flex items-center">
+					<h4 class="text-xs font-bold text-yellow-400 uppercase tracking-wider">Email Addresses (${emails.length})</h4>
+					${reconTip('Email addresses found in the page HTML source code. These may be contact addresses, admin emails, or addresses leaked in comments/scripts.')}
+				</div>
+				<div class="p-3 space-y-1">`;
+			for (const email of emails) {
+				html += `<code class="block text-xs font-mono text-yellow-300/80">${escapeHtml(email)}</code>`;
+			}
+			html += `</div></div>`;
+		}
+		html += `</div>`;
+	}
+
+	// Probes
+	if (data.probes && data.probes.length > 0) {
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Path Probing</h4>
+				${reconTip('Common paths checked for existence: robots.txt, sitemap.xml, admin panels, security.txt, etc. Green = accessible (2xx/3xx), gray = not found or blocked.')}
+			</div>
+			<div class="divide-y divide-cyber-accent/10">`;
+		for (const probe of data.probes) {
+			const statusColor = probe.exists ? 'text-cyber-success' : 'text-gray-600';
+			const statusBg = probe.exists ? 'bg-cyber-success/10' : 'bg-gray-500/5';
+			html += `<div class="flex items-center justify-between px-4 py-2 ${statusBg}">
+				<div class="flex items-center gap-2">
+					<span class="w-2 h-2 rounded-full ${probe.exists ? 'bg-cyber-success' : 'bg-gray-600'}"></span>
+					<code class="text-xs font-mono ${statusColor}">${escapeHtml(probe.path)}</code>
+					<span class="text-[10px] text-gray-500">${escapeHtml(probe.name)}</span>
+				</div>
+				<span class="text-[10px] font-mono ${probe.exists ? 'text-cyber-success' : 'text-gray-600'}">${probe.status || '—'}</span>
+			</div>`;
+		}
+		html += `</div></div>`;
+
+		for (const probe of data.probes) {
+			if (probe.snippet) {
+				html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+					<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30">
+						<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">${escapeHtml(probe.name)} Content</h4>
+					</div>
+					<pre class="p-3 text-[11px] font-mono text-gray-400 overflow-x-auto max-h-48 overflow-y-auto">${escapeHtml(probe.snippet)}</pre>
+				</div>`;
+			}
+		}
+	}
+
+	// Security Headers Summary
+	if (data.securityHeaders) {
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center justify-between">
+				<div class="flex items-center">
+					<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Security Headers</h4>
+					${reconTip('HTTP security headers that protect against common attacks: CSP (XSS), HSTS (HTTPS enforcement), X-Frame-Options (clickjacking), X-Content-Type-Options (MIME sniffing), Referrer-Policy, Permissions-Policy.')}
+				</div>
+				<span class="text-[10px] font-bold ${parseInt(data.securityHeadersScore) >= 4 ? 'text-cyber-success' : parseInt(data.securityHeadersScore) >= 2 ? 'text-yellow-400' : 'text-cyber-danger'}">${data.securityHeadersScore}</span>
+			</div>
+			<div class="divide-y divide-cyber-accent/10">`;
+		for (const [header, value] of Object.entries(data.securityHeaders)) {
+			const present = value !== null;
+			html += `<div class="flex items-center justify-between px-4 py-1.5 ${present ? 'bg-cyber-success/5' : ''}">
+				<code class="text-[11px] font-mono ${present ? 'text-white' : 'text-gray-600'}">${escapeHtml(header)}</code>
+				<span class="text-[10px] ${present ? 'text-cyber-success font-bold' : 'text-gray-600'}">
+					${present ? '✓' : '✗'}
+				</span>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// SSL / TLS + Certificate
+	const cert = data.ssl?.certificate;
+	html += `<div class="bg-cyber-card border border-emerald-500/20 rounded-xl overflow-hidden mb-4">
+		<div class="px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-500/5 flex items-center">
+			<h4 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">SSL / TLS</h4>
+			${reconTip('SSL/TLS encryption status, HSTS header, and certificate details retrieved from Certificate Transparency logs (crt.sh). Shows issuer (CA), validity dates, and Subject Alternative Names (SANs).')}
+		</div>
+		<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-emerald-500/10">
+			<div class="bg-cyber-card p-3">
+				<span class="text-[10px] text-gray-500 uppercase block">HTTPS</span>
+				<span class="text-sm font-bold ${data.ssl?.isHttps ? 'text-cyber-success' : 'text-cyber-danger'}">${data.ssl?.isHttps ? 'Enabled' : 'Disabled'}</span>
+			</div>
+			<div class="bg-cyber-card p-3">
+				<span class="text-[10px] text-gray-500 uppercase block">HSTS</span>
+				<span class="text-xs font-mono ${data.ssl?.hsts ? 'text-cyber-success' : 'text-gray-600'}">${data.ssl?.hsts ? 'Configured' : 'Not set'}</span>
+			</div>`;
+	if (cert) {
+		// Parse issuer for display
+		const issuerName = cert.issuer ? (cert.issuer.match(/O=([^,]+)/)?.[1] || cert.issuer.match(/CN=([^,]+)/)?.[1] || cert.issuer).trim() : 'Unknown';
+		// Check validity
+		const notAfter = cert.notAfter ? new Date(cert.notAfter) : null;
+		const daysLeft = notAfter ? Math.ceil((notAfter.getTime() - Date.now()) / 86400000) : null;
+		const validityColor = daysLeft === null ? 'text-gray-600' : daysLeft > 30 ? 'text-cyber-success' : daysLeft > 0 ? 'text-yellow-400' : 'text-cyber-danger';
+		const validityText = daysLeft === null ? 'Unknown' : daysLeft > 0 ? `${daysLeft} days left` : 'Expired';
+
+		html += `
+			<div class="bg-cyber-card p-3">
+				<span class="text-[10px] text-gray-500 uppercase block">Issuer (CA)</span>
+				<span class="text-xs text-white font-bold">${escapeHtml(issuerName)}</span>
+			</div>
+			<div class="bg-cyber-card p-3">
+				<span class="text-[10px] text-gray-500 uppercase block">Validity</span>
+				<span class="text-xs font-bold ${validityColor}">${validityText}</span>
+			</div>
+			<div class="bg-cyber-card p-3">
+				<span class="text-[10px] text-gray-500 uppercase block">Not Before</span>
+				<span class="text-xs text-white font-mono">${cert.notBefore ? new Date(cert.notBefore).toLocaleDateString() : 'N/A'}</span>
+			</div>
+			<div class="bg-cyber-card p-3">
+				<span class="text-[10px] text-gray-500 uppercase block">Not After</span>
+				<span class="text-xs text-white font-mono">${cert.notAfter ? new Date(cert.notAfter).toLocaleDateString() : 'N/A'}</span>
+			</div>
+			<div class="bg-cyber-card p-3 col-span-2 md:col-span-4">
+				<span class="text-[10px] text-gray-500 uppercase block">Subject</span>
+				<span class="text-xs text-white font-mono">${escapeHtml(cert.subject || 'N/A')}</span>
+			</div>`;
+		if (cert.domains && cert.domains.length > 0) {
+			html += `<div class="bg-cyber-card p-3 col-span-2 md:col-span-4">
+				<span class="text-[10px] text-gray-500 uppercase block mb-1">Subject Alternative Names (SANs) — ${cert.domains.length}</span>
+				<div class="flex flex-wrap gap-1">${cert.domains.map(d => `<code class="text-[10px] font-mono text-emerald-400/70 px-1.5 py-0.5 bg-emerald-500/10 rounded">${escapeHtml(d)}</code>`).join('')}</div>
+			</div>`;
+		}
+		if (cert.serialNumber) {
+			html += `<div class="bg-cyber-card p-3 col-span-2 md:col-span-4">
+				<span class="text-[10px] text-gray-500 uppercase block">Serial Number</span>
+				<code class="text-[10px] text-gray-400 font-mono break-all">${escapeHtml(cert.serialNumber)}</code>
+			</div>`;
+		}
+	} else {
+		html += `<div class="bg-cyber-card p-3 col-span-2"><span class="text-xs text-gray-500">Certificate details not available</span></div>`;
+	}
+	html += `</div></div>`;
+
+	if (data.ssl?.hsts) {
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl p-3 mb-4">
+			<span class="text-[10px] text-gray-500 uppercase flex items-center mb-1">HSTS Header${reconTip('Full Strict-Transport-Security header value. max-age sets the duration browsers remember to use HTTPS. includeSubDomains extends to all subdomains.')}</span>
+			<code class="text-[11px] font-mono text-emerald-400 break-all">${escapeHtml(data.ssl.hsts)}</code>
+		</div>`;
+	}
+
+	// Cookies
+	if (data.cookies && data.cookies.length > 0) {
+		html += `<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-cyber-accent/20 bg-cyber-elevated/30 flex items-center">
+				<h4 class="text-xs font-bold text-cyber-accent uppercase tracking-wider">Cookies (${data.cookies.length})</h4>
+				${reconTip('Cookies set by the server. Secure flag = sent only over HTTPS. HttpOnly = not accessible to JavaScript (XSS protection). SameSite = CSRF protection. Missing flags are security risks.')}
+			</div>
+			<div class="divide-y divide-cyber-accent/10">`;
+		for (const cookie of data.cookies) {
+			const hasSecure = cookie.flags.includes('Secure');
+			const hasHttpOnly = cookie.flags.includes('HttpOnly');
+			html += `<div class="flex items-center justify-between px-4 py-2">
+				<code class="text-xs font-mono text-white">${escapeHtml(cookie.name)}</code>
+				<div class="flex gap-1">
+					${cookie.flags.map(f => {
+						const color = f === 'Secure' ? 'text-cyber-success bg-cyber-success/10 border-cyber-success/30' :
+							f === 'HttpOnly' ? 'text-blue-400 bg-blue-500/10 border-blue-500/30' :
+							'text-gray-400 bg-gray-500/10 border-gray-500/30';
+						return `<span class="text-[9px] px-1.5 py-0.5 rounded border ${color} font-bold">${escapeHtml(f)}</span>`;
+					}).join('')}
+					${!hasSecure ? '<span class="text-[9px] px-1.5 py-0.5 rounded border text-cyber-danger bg-cyber-danger/10 border-cyber-danger/30 font-bold">No Secure</span>' : ''}
+					${!hasHttpOnly ? '<span class="text-[9px] px-1.5 py-0.5 rounded border text-orange-400 bg-orange-500/10 border-orange-500/30 font-bold">No HttpOnly</span>' : ''}
+				</div>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// All Response Headers (collapsible)
+	if (data.responseHeaders) {
+		html += `<details open class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<summary class="px-4 py-2.5 bg-cyber-elevated/30 cursor-pointer text-xs font-bold text-gray-400 uppercase tracking-wider hover:text-white transition-colors flex items-center">
+				All Response Headers (${Object.keys(data.responseHeaders).length})
+				${reconTip('Complete list of HTTP response headers returned by the server. May reveal server software, caching configuration, security policies, and custom headers.')}
+			</summary>
+			<div class="p-3 max-h-64 overflow-y-auto space-y-1">`;
+		for (const [key, value] of Object.entries(data.responseHeaders)) {
+			html += `<div class="flex gap-2 text-[11px]">
+				<span class="font-mono text-cyber-accent font-bold whitespace-nowrap">${escapeHtml(key)}:</span>
+				<span class="font-mono text-gray-400 break-all">${escapeHtml(String(value))}</span>
+			</div>`;
+		}
+		html += `</div></details>`;
+	}
+
+	// Reverse IP (other domains on same IP) — at the very end
+	if (data.reverseIpDomains && data.reverseIpDomains.length > 0) {
+		const domains = data.reverseIpDomains;
+		const targetHost = data.hostname?.toLowerCase() || '';
+		const otherDomains = domains.filter(d => d !== targetHost);
+		html += `<div class="bg-cyber-card border border-amber-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5 flex items-center justify-between">
+				<div class="flex items-center">
+					<h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider">Reverse IP — Shared Hosting (${otherDomains.length} domain${otherDomains.length > 1 ? 's' : ''})</h4>
+					${reconTip('Domains hosted on the same IP address (shared hosting). This reveals other websites sharing the same server, which can indicate shared hosting, CDN, or virtual hosting configuration.')}
+				</div>
+				${data.dns?.ipAddresses?.[0] ? `<code class="text-[10px] font-mono text-gray-500">${escapeHtml(data.dns.ipAddresses[0])}</code>` : ''}
+			</div>
+			<div class="max-h-64 overflow-y-auto divide-y divide-amber-500/10">`;
+		for (const domain of otherDomains) {
+			const isSelf = domain === targetHost;
+			html += `<div class="flex items-center justify-between px-4 py-1.5 hover:bg-cyber-elevated/30 transition-colors">
+				<div class="flex items-center gap-2 min-w-0">
+					<span class="w-1.5 h-1.5 rounded-full ${isSelf ? 'bg-amber-400' : 'bg-gray-600'} flex-shrink-0"></span>
+					<code class="text-xs font-mono ${isSelf ? 'text-amber-400 font-bold' : 'text-white'} whitespace-nowrap">${escapeHtml(domain)}</code>
+				</div>
+				<a href="https://${escapeHtml(domain)}" target="_blank" rel="noopener" class="text-[10px] text-gray-600 hover:text-cyan-400 transition-colors flex-shrink-0 ml-2">
+					<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+				</a>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	html += `</div>`;
+	resultsDiv.innerHTML = html;
+}
