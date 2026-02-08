@@ -9,6 +9,66 @@ import {
 } from './advanced-payloads';
 import { HTTPManipulator, ManipulatedRequest, HTTPManipulationOptions } from './http-manipulation';
 
+// =============================================
+// RATE LIMITER (in-memory, per-IP)
+// =============================================
+interface RateLimitEntry {
+	count: number;
+	resetAt: number;
+}
+
+const RATE_LIMIT_WINDOW = 60_000; // 1 minute
+const RATE_LIMIT_MAX = 1;         // 1 request per minute per IP
+const rateLimitMap = new Map<string, RateLimitEntry>();
+
+function getRateLimitInfo(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
+	const now = Date.now();
+	let entry = rateLimitMap.get(ip);
+
+	// Clean up expired entries periodically (every 100 checks)
+	if (Math.random() < 0.01) {
+		for (const [key, val] of rateLimitMap) {
+			if (now > val.resetAt) rateLimitMap.delete(key);
+		}
+	}
+
+	if (!entry || now > entry.resetAt) {
+		entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+		rateLimitMap.set(ip, entry);
+	}
+
+	entry.count++;
+	const allowed = entry.count <= RATE_LIMIT_MAX;
+	const remaining = Math.max(0, RATE_LIMIT_MAX - entry.count);
+	return { allowed, remaining, resetAt: entry.resetAt };
+}
+
+function getClientIP(request: Request): string {
+	return request.headers.get('cf-connecting-ip')
+		|| request.headers.get('x-real-ip')
+		|| request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+		|| '0.0.0.0';
+}
+
+function apiJsonResponse(data: any, status: number = 200, rateHeaders?: Record<string, string>): Response {
+	const headers: Record<string, string> = {
+		'content-type': 'application/json; charset=UTF-8',
+		'access-control-allow-origin': '*',
+		'access-control-allow-methods': 'GET, POST, OPTIONS',
+		'access-control-allow-headers': 'Content-Type',
+		...(rateHeaders || {}),
+	};
+	return new Response(JSON.stringify(data, null, 2), { status, headers });
+}
+
+function rateLimitHeaders(remaining: number, resetAt: number): Record<string, string> {
+	return {
+		'x-ratelimit-limit': String(RATE_LIMIT_MAX),
+		'x-ratelimit-remaining': String(remaining),
+		'x-ratelimit-reset': String(Math.ceil(resetAt / 1000)),
+	};
+}
+
 // --- Payload loading from GitHub ---
 const GITHUB_PAYLOADS_URL = 'https://raw.githubusercontent.com/PAPAMICA/waf-payloads/refs/heads/main/payloads.json';
 let payloadsLoaded = false;
@@ -312,9 +372,281 @@ export default {
 		if (urlObj.pathname === '/api/seo') {
 			return await handleSEOAudit(request);
 		}
+
+		// =============================================================
+		// PUBLIC API v1 — rate-limited JSON endpoints for curl / scripts
+		// =============================================================
+		if (urlObj.pathname.startsWith('/api/v1/')) {
+			// Handle CORS preflight
+			if (request.method === 'OPTIONS') {
+				return apiJsonResponse(null, 204);
+			}
+
+			const ip = getClientIP(request);
+			const rl = getRateLimitInfo(ip);
+			const rlHeaders = rateLimitHeaders(rl.remaining, rl.resetAt);
+
+			if (!rl.allowed) {
+				return apiJsonResponse(
+					{ error: 'Rate limit exceeded', message: `Maximum ${RATE_LIMIT_MAX} request${RATE_LIMIT_MAX > 1 ? 's' : ''} per minute. Try again later.`, retryAfter: Math.ceil((rl.resetAt - Date.now()) / 1000) },
+					429,
+					{ ...rlHeaders, 'retry-after': String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
+				);
+			}
+
+			const apiPath = urlObj.pathname.replace('/api/v1', '');
+
+			// GET /api/v1/ — API info
+			if (apiPath === '/' || apiPath === '') {
+				return apiJsonResponse({
+					name: 'WAF-Checker API',
+					version: '1.0',
+					documentation: `${urlObj.origin}/api/v1/docs`,
+					endpoints: [
+						'GET /api/v1/waf-checker?url=<target>',
+						'GET /api/v1/recon?url=<target>',
+						'GET /api/v1/security-headers?url=<target>',
+						'GET /api/v1/speedtest?url=<target>',
+						'GET /api/v1/seo?url=<target>',
+						'GET /api/v1/http-manipulation?url=<target>',
+					],
+					rateLimit: { limit: RATE_LIMIT_MAX, window: '1 minute', remaining: rl.remaining },
+				}, 200, rlHeaders);
+			}
+
+			// GET /api/v1/docs — full documentation
+			if (apiPath === '/docs') {
+				return apiJsonResponse(getAPIDocumentation(urlObj.origin), 200, rlHeaders);
+			}
+
+			// Ensure target URL
+			const target = urlObj.searchParams.get('url');
+			if (!target) {
+				return apiJsonResponse({ error: 'Missing required parameter: url', example: `${urlObj.origin}${urlObj.pathname}?url=https://example.com` }, 400, rlHeaders);
+			}
+
+			// Normalize target URL
+			let normalizedTarget = target;
+			if (!normalizedTarget.startsWith('http://') && !normalizedTarget.startsWith('https://')) {
+				normalizedTarget = 'https://' + normalizedTarget;
+			}
+
+			try {
+				// --- WAF Checker: full payload test with all advanced options ---
+				if (apiPath === '/waf-checker') {
+					const methods = (urlObj.searchParams.get('methods') || 'GET').split(',').map(m => m.trim()).filter(Boolean);
+					const categoriesParam = urlObj.searchParams.get('categories');
+					const categories = categoriesParam ? categoriesParam.split(',').map(c => c.trim()).filter(Boolean) : undefined;
+					const page = parseInt(urlObj.searchParams.get('page') || '0', 10);
+					const followRedirect = urlObj.searchParams.get('followRedirect') === '1';
+					const falsePositiveTest = urlObj.searchParams.get('falsePositiveTest') === '1';
+					const caseSensitiveTest = urlObj.searchParams.get('caseSensitiveTest') === '1';
+					const useEnhancedPayloads = urlObj.searchParams.get('enhancedPayloads') === '1';
+					const useAdvancedPayloads = urlObj.searchParams.get('advancedPayloads') === '1';
+					const autoDetectWAF = urlObj.searchParams.get('autoDetectWAF') === '1';
+					const useEncodingVariations = urlObj.searchParams.get('encodingVariations') === '1';
+					const enableHTTPManipulation = urlObj.searchParams.get('httpManipulation') === '1';
+					const detectedWAF = urlObj.searchParams.get('detectedWAF') || undefined;
+					const payloadTemplate = urlObj.searchParams.get('payloadTemplate') || undefined;
+					const customHeaders = urlObj.searchParams.get('headers') || undefined;
+
+					// Run WAF detection first if autoDetectWAF
+					let wafResult: any = null;
+					if (autoDetectWAF) {
+						try {
+							const det = await WAFDetector.activeDetection(normalizedTarget);
+							wafResult = det;
+						} catch { /* ignore */ }
+					}
+
+					const results = await handleApiCheckFiltered(
+						normalizedTarget,
+						page,
+						methods,
+						categories,
+						payloadTemplate,
+						followRedirect,
+						customHeaders,
+						falsePositiveTest,
+						caseSensitiveTest,
+						useEnhancedPayloads,
+						useAdvancedPayloads,
+						autoDetectWAF,
+						useEncodingVariations,
+						detectedWAF || (wafResult?.wafName && wafResult.wafName !== 'Unknown' ? wafResult.wafName : undefined),
+						enableHTTPManipulation ? { enableParameterPollution: true, enableVerbTampering: true, enableContentTypeConfusion: true } : undefined,
+					);
+
+					const responseData: any = {
+						target: normalizedTarget,
+						methods,
+						options: {
+							followRedirect, falsePositiveTest, caseSensitiveTest,
+							enhancedPayloads: useEnhancedPayloads, advancedPayloads: useAdvancedPayloads,
+							autoDetectWAF, encodingVariations: useEncodingVariations, httpManipulation: enableHTTPManipulation,
+						},
+						totalResults: results.length,
+						results,
+					};
+					if (wafResult) responseData.wafDetection = wafResult;
+					if (categories) responseData.categories = categories;
+					if (page > 0) responseData.page = page;
+
+					return apiJsonResponse(responseData, 200, rlHeaders);
+				}
+
+				// --- Other endpoints: proxy to internal handlers ---
+				const fakeReq = new Request(`${urlObj.origin}/api${apiPath}?url=${encodeURIComponent(normalizedTarget)}`, {
+					method: request.method,
+					headers: request.headers,
+				});
+
+				let response: Response;
+
+				switch (apiPath) {
+					case '/recon':
+						response = await handleFullRecon(fakeReq);
+						break;
+					case '/security-headers':
+						response = await handleSecurityHeaders(fakeReq);
+						break;
+					case '/speedtest':
+						response = await handleSpeedTest(fakeReq);
+						break;
+					case '/seo':
+						response = await handleSEOAudit(fakeReq);
+						break;
+					case '/http-manipulation':
+						response = await handleHTTPManipulation(fakeReq);
+						break;
+					default:
+						return apiJsonResponse({ error: 'Unknown endpoint', available: ['/waf-checker', '/recon', '/security-headers', '/speedtest', '/seo', '/http-manipulation'] }, 404, rlHeaders);
+				}
+
+				// Re-wrap the response with rate-limit headers and CORS
+				const body = await response.text();
+				let jsonData: any;
+				try { jsonData = JSON.parse(body); } catch { jsonData = { raw: body }; }
+
+				return apiJsonResponse(jsonData, response.status, rlHeaders);
+			} catch (err: any) {
+				return apiJsonResponse({ error: 'Internal server error', message: err?.message || 'Unknown error' }, 500, rlHeaders);
+			}
+		}
+
 		return new Response('Not found', { status: 404 });
 	},
 };
+
+// API Documentation
+function getAPIDocumentation(origin: string) {
+	return {
+		name: 'WAF-Checker Public API',
+		version: '1.0',
+		baseUrl: `${origin}/api/v1`,
+		rateLimit: {
+			maxRequests: RATE_LIMIT_MAX,
+			window: '1 minute',
+			headers: {
+				'x-ratelimit-limit': 'Maximum requests per window',
+				'x-ratelimit-remaining': 'Remaining requests in current window',
+				'x-ratelimit-reset': 'Unix timestamp when the window resets',
+			},
+		},
+		authentication: 'None required (public API)',
+		responseFormat: 'JSON',
+		endpoints: [
+			{
+				method: 'GET',
+				path: '/api/v1/waf-checker',
+				description: 'Run WAF payload tests against a target website with full advanced options',
+				parameters: [
+					{ name: 'url', type: 'string', required: true, description: 'Target URL (e.g. https://example.com)' },
+					{ name: 'methods', type: 'string', required: false, description: 'Comma-separated HTTP methods (default: GET). Options: GET,POST,PUT,DELETE' },
+					{ name: 'categories', type: 'string', required: false, description: 'Comma-separated payload categories to test' },
+					{ name: 'page', type: 'number', required: false, description: 'Pagination (50 results per page, default: 0)' },
+					{ name: 'followRedirect', type: '0|1', required: false, description: 'Follow HTTP redirects (default: 0)' },
+					{ name: 'falsePositiveTest', type: '0|1', required: false, description: 'Include false-positive control payloads (default: 0)' },
+					{ name: 'caseSensitiveTest', type: '0|1', required: false, description: 'Test case-sensitivity of WAF rules (default: 0)' },
+					{ name: 'enhancedPayloads', type: '0|1', required: false, description: 'Use enhanced payload set with encoding variations (default: 0)' },
+					{ name: 'advancedPayloads', type: '0|1', required: false, description: 'Use advanced WAF bypass payloads (default: 0)' },
+					{ name: 'autoDetectWAF', type: '0|1', required: false, description: 'Auto-detect WAF before testing and adapt payloads (default: 0)' },
+					{ name: 'encodingVariations', type: '0|1', required: false, description: 'Use encoding variations (URL, double-URL, Unicode, etc.) (default: 0)' },
+					{ name: 'httpManipulation', type: '0|1', required: false, description: 'Enable HTTP manipulation techniques (default: 0)' },
+					{ name: 'detectedWAF', type: 'string', required: false, description: 'Pre-detected WAF name to use for payload adaptation' },
+					{ name: 'payloadTemplate', type: 'string', required: false, description: 'Custom JSON body template (use {{payload}} placeholder)' },
+					{ name: 'headers', type: 'string', required: false, description: 'Custom HTTP headers (Header: value format, one per line)' },
+				],
+				example: {
+					curl: `curl "${origin}/api/v1/waf-checker?url=https://example.com&methods=GET,POST&autoDetectWAF=1&advancedPayloads=1"`,
+					response: { target: 'https://example.com', wafDetection: '...', totalResults: 50, results: ['...'] },
+				},
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/recon',
+				description: 'Full reconnaissance report: DNS, WHOIS, technologies, SSL/TLS, subdomains, reverse IP, etc.',
+				parameters: [{ name: 'url', type: 'string', required: true, description: 'Target URL' }],
+				example: {
+					curl: `curl "${origin}/api/v1/recon?url=https://example.com"`,
+					response: { domain: 'example.com', dns: '...', whois: '...', technologies: '...', ssl: '...' },
+				},
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/security-headers',
+				description: 'Audit HTTP security headers of a website with grades and recommendations',
+				parameters: [{ name: 'url', type: 'string', required: true, description: 'Target URL' }],
+				example: {
+					curl: `curl "${origin}/api/v1/security-headers?url=https://example.com"`,
+					response: { grade: 'B+', headers: '...', missing: '...' },
+				},
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/speedtest',
+				description: 'Performance analysis: load times, Core Web Vitals estimates, resource analysis, optimization advice',
+				parameters: [{ name: 'url', type: 'string', required: true, description: 'Target URL' }],
+				example: {
+					curl: `curl "${origin}/api/v1/speedtest?url=https://example.com"`,
+					response: { scores: '...', timing: '...', resources: '...', advice: '...' },
+				},
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/seo',
+				description: 'SEO audit: meta tags, headings, links, sitemap, robots.txt, structured data, accessibility, content analysis',
+				parameters: [{ name: 'url', type: 'string', required: true, description: 'Target URL' }],
+				example: {
+					curl: `curl "${origin}/api/v1/seo?url=https://example.com"`,
+					response: { score: 85, categories: '...', meta: '...', issues: '...' },
+				},
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/http-manipulation',
+				description: 'Test HTTP manipulation techniques (verb tampering, parameter pollution, content-type confusion)',
+				parameters: [{ name: 'url', type: 'string', required: true, description: 'Target URL' }],
+				example: {
+					curl: `curl "${origin}/api/v1/http-manipulation?url=https://example.com"`,
+					response: { results: '...', manipulations: '...' },
+				},
+			},
+		],
+		errors: {
+			400: 'Missing or invalid parameters',
+			404: 'Unknown endpoint',
+			429: 'Rate limit exceeded — wait and retry',
+			500: 'Internal server error',
+			502: 'Cannot reach target site',
+		},
+		tips: [
+			'URL parameter is automatically normalized: "example.com" becomes "https://example.com"',
+			'Use jq for pretty-printing: curl ... | jq .',
+			'Pipe output to a file: curl ... -o result.json',
+		],
+	};
+}
 
 // New streaming endpoint with parallelized requests
 async function handleApiCheckStream(request: Request): Promise<Response> {

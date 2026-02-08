@@ -74,6 +74,13 @@
 					</svg>
 					<span class="hidden md:inline">GitHub</span>
 				</a>
+				<button type="button" onclick="showAPIDocsModal()"
+						class="inline-flex items-center gap-2 px-3 py-1.5 bg-cyber-elevated border border-cyber-accent/20 rounded-full text-gray-400 hover:text-emerald-400 hover:border-emerald-400 transition-all text-sm">
+					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+					</svg>
+					<span class="hidden md:inline">API</span>
+				</button>
 			</div>
 			<div class="flex-1 text-center">
 				<a href="/" onclick="event.preventDefault(); goHome();" class="no-underline">
@@ -889,5 +896,41 @@
 			<span>Fork of <a href="https://github.com/SecH0us3/waf-checker" target="_blank" rel="noopener" class="text-cyber-accent hover:text-cyber-success transition-colors">SecH0us3/waf-checker</a></span>
 		</footer>
 	<div id="reconTooltip"></div>
+
+	<!-- API Docs Panel (slides down from top, above header) -->
+	<div id="apiDocsPanel" class="fixed inset-0 z-[200]" style="visibility:hidden">
+		<!-- Backdrop -->
+		<div id="apiDocsBackdrop" onclick="closeAPIPanel()" class="absolute inset-0" style="background:rgba(0,0,0,0);transition:background .35s ease"></div>
+		<!-- Sliding sheet -->
+		<div id="apiDocsSheet" class="absolute inset-0 flex flex-col" style="transform:translateY(-100%);transition:transform .4s cubic-bezier(.4,0,.2,1);background:#0b0f15">
+			<!-- Header bar -->
+			<div class="shrink-0 border-b border-cyber-accent/15" style="background:linear-gradient(180deg,#111720 0%,#0b0f15 100%)">
+				<div class="flex items-center justify-between px-6 h-14">
+					<!-- Left: logo + title -->
+					<div class="flex items-center gap-3">
+						<div class="w-8 h-8 rounded-lg flex items-center justify-center border border-emerald-500/20" style="background:rgba(16,185,129,.08)">
+							<svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+						</div>
+						<div class="leading-tight">
+							<span class="text-sm font-bold text-gray-100">WAF-Checker API</span>
+							<div class="flex items-center gap-2 mt-0.5">
+								<span class="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">v1.0</span>
+								<span class="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">public</span>
+								<span class="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">1 req/min</span>
+							</div>
+						</div>
+					</div>
+					<!-- Right: close button -->
+					<button onclick="closeAPIPanel()" class="group flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-700/50 text-gray-400 hover:text-red-400 hover:border-red-500/30 hover:bg-red-500/5 transition-all text-xs">
+						<span class="hidden sm:inline">Fermer</span>
+						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+					</button>
+				</div>
+			</div>
+			<!-- Scrollable body -->
+			<div id="apiDocsBody" class="flex-1 overflow-y-auto"></div>
+		</div>
+	</div>
+
 	</body>
 </html>

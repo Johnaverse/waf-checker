@@ -1,6 +1,13 @@
 /* WAF-CHECKER.COM - Minimal CSS for dynamic elements */
 /* Main styling is handled by Tailwind CSS */
 
+/* When API docs panel is open: hide main header and disclaimer so only the panel is visible */
+body.api-panel-open #disclaimerBanner,
+body.api-panel-open > header {
+	visibility: hidden !important;
+	pointer-events: none !important;
+}
+
 /* Force dark backgrounds on Bootstrap modals (override Bootstrap's white defaults) */
 .modal-content {
 	background-color: #161b22 !important;
@@ -1419,4 +1426,37 @@ main {
 	display: inline-flex;
 	cursor: help;
 	vertical-align: middle;
+}
+
+/* =============================================
+   API DOCS PANEL
+   ============================================= */
+#apiDocsPanel {
+	transition: opacity .25s ease;
+}
+
+/* Endpoint collapse/expand */
+.ep-body {
+	max-height: 600px;
+	overflow: hidden;
+	transition: max-height .25s ease, padding .25s ease, opacity .2s ease;
+	opacity: 1;
+}
+.ep-body.ep-collapsed {
+	max-height: 0;
+	padding-top: 0 !important;
+	padding-bottom: 0 !important;
+	opacity: 0;
+}
+
+/* Chevron rotation */
+.ep-body.ep-collapsed ~ div svg:last-child,
+div:has(+ .ep-body.ep-collapsed) svg:last-child {
+	transform: rotate(-90deg);
+}
+
+/* Input focus glow */
+#apiDocsDomain:focus {
+	border-color: rgba(0,217,255,.5);
+	box-shadow: 0 0 0 3px rgba(0,217,255,.08);
 }

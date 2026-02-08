@@ -62,6 +62,18 @@ A powerful web application to test how well your Web Application Firewall (WAF) 
 - **Actionable recommendations** for each missing or misconfigured header
 - **Export results** as JSON, HTML report, or screenshot (PNG)
 
+### Speed Test
+
+![Speed Test](./img/11-speedtest.png)
+
+- **Performance score** (0–100) with issues count and status
+- **Lighthouse-style scores** (estimated locally) — Performance, Accessibility, Best Practices, SEO
+- **Core Web Vitals** — FCP, LCP, TBT, CLS, Speed Index, TTI with color-coded feedback
+- **Timing breakdown** — DNS lookup, TTFB, download, total load time
+- **Size breakdown** — total page weight and per-type (HTML, JavaScript, images, fonts)
+- **Optimization advice** and penalty/improvement hints
+- **Export results** as JSON, HTML report, or screenshot (PNG)
+
 ### DNS / WHOIS Intelligence
 
 ![DNS / WHOIS Intelligence](./img/10-inspect-dns.png)
@@ -72,6 +84,19 @@ A powerful web application to test how well your Web Application Firewall (WAF) 
 - **Subdomain enumeration** — Certificate Transparency + DNS brute-force
 - **Reverse IP lookup** — all domains sharing the same IP address
 - **Infrastructure detection** — CDN, email, and DNS providers from record patterns
+- **Export results** as JSON, HTML report, or screenshot (PNG)
+
+### SEO Audit
+
+![SEO Audit](./img/12-seo-audit.png)
+
+- **Overall SEO score** (0–100) with checks passed / total
+- **Score by category** — Meta Tags, Technical, Indexability, Content, Performance, Social, Links, URL, Accessibility
+- **Meta tags verification** — title, description, viewport, canonical, language, charset, favicon, DOCTYPE, robots
+- **Sitemap & robots.txt** analysis, page discovery, structured data (JSON-LD)
+- **Content analysis** — word count, readability, keyword density, text-to-HTML ratio
+- **Links audit** — internal/external, nofollow, empty anchors
+- **Accessibility checks** — lang, skip nav, ARIA landmarks, form labels
 - **Export results** as JSON, HTML report, or screenshot (PNG)
 
 ### Real-Time Results
@@ -126,6 +151,18 @@ Detailed vulnerability assessment reports with scoring:
 - Per-category vulnerability assessment with scores
 - Screenshot support for sharing (PNG with branding)
 - All recon/audit features support JSON, HTML, and screenshot export
+
+### Public API
+
+![Public API](./img/13-api.png)
+
+- **REST API** for all tools — WAF checker, full recon, security headers, speed test, SEO audit, HTTP manipulation
+- **Rate limit** — 1 request per minute per IP (headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`)
+- **No authentication** — public API, URL auto-normalized
+- **JSON responses** — use `curl`, `jq`, or any HTTP client; save with `-o file.json`
+- **WAF Checker endpoint** (`/api/v1/waf-checker`) with full advanced options: methods, categories, pagination, followRedirect, enhanced/advanced payloads, auto WAF detection, encoding variations, HTTP manipulation
+- **Error codes** — 400 (bad param), 404 (not found), 429 (rate limit), 500/502 (server/target error)
+- **Documentation** — in-app panel and machine-readable `GET /api/v1/docs`
 
 ### Batch Testing
 - Test **up to 100 URLs** simultaneously
