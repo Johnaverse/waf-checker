@@ -185,7 +185,11 @@ WAF-Checker is built as a **Cloudflare Worker** with static assets:
 ### Project Structure
 
 ```
+Dockerfile                     # Docker image definition
+docker-compose.yml             # Docker Compose for self-hosting
 wrangler.toml                  # Cloudflare Worker configuration
+.github/workflows/
+└── docker-publish.yml         # CI: build & push image to GHCR
 app/src/
 ├── api.ts                     # Main Worker entry point & API routes
 ├── payloads.ts                # Payload types (data loaded from GitHub)
@@ -204,11 +208,49 @@ app/src/
 
 ## Getting Started
 
+### Docker (Recommended — no Node.js required)
+
+Pull and run the pre-built image from GitHub Container Registry:
+
+```bash
+docker run -p 8787:8787 ghcr.io/papamica/waf-checker:latest
+```
+
+Open `http://localhost:8787` in your browser.
+
+#### Docker Compose
+
+```bash
+curl -O https://raw.githubusercontent.com/PAPAMICA/waf-checker/main/docker-compose.yml
+docker compose up -d
+```
+
+Or save this as `docker-compose.yml` and run `docker compose up -d`:
+
+```yaml
+services:
+  waf-checker:
+    image: ghcr.io/papamica/waf-checker:latest
+    container_name: waf-checker
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+```
+
+#### Build from Source with Docker
+
+```bash
+git clone https://github.com/PAPAMICA/waf-checker.git
+cd waf-checker
+docker build -t waf-checker .
+docker run -p 8787:8787 waf-checker
+```
+
+### Local Development (Node.js)
+
 ### Prerequisites
 - [Node.js](https://nodejs.org/) (v18+)
 - [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/)
-
-### Local Development
 
 ```bash
 # Clone the repository

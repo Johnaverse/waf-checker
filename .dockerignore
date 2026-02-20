@@ -1,0 +1,32 @@
+# Git
+.git
+.gitignore
+
+# IDE and editor
+.vscode
+.sonarlint
+.editorconfig
+
+# MCP / local config
+.mcp.json
+
+# Dependencies (reinstalled during build)
+node_modules
+app/node_modules
+
+# Wrangler cache
+.wrangler
+
+# Logs
+*.log
+
+# Documentation assets
+README.md
+img/
+
+# Test files
+app/test/
+
+# OS artifacts
+.DS_Store
+Thumbs.db

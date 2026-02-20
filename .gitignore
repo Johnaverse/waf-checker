@@ -13,3 +13,5 @@ venv/
 *.log
 node_modules/
 .wrangler
+.mcp.json
+.sonarlint/

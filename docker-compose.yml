@@ -1,0 +1,7 @@
+services:
+  waf-checker:
+    image: ghcr.io/papamica/waf-checker:latest
+    container_name: waf-checker
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
